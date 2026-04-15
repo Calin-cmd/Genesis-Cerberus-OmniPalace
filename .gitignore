@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+venv/
+env/
+*.env
+
+# Genesis runtime data - DO NOT commit
+.agentic_memory/
+traces/
+proposed_patches/
+chroma/
+obsidian_vault/raw/
+genesis/obsidian_vault/raw/
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+*.bak.*
+
+# OS generated
+.DS_Store
+Thumbs.db
