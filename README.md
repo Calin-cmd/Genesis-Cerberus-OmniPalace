@@ -156,4 +156,3 @@ Docker + API-first deployment
 Technical Contact / Maintainer: Calin Beale
 
 Built as a long-term personal AI companion and knowledge system.
-
