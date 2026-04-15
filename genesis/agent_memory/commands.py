@@ -200,12 +200,18 @@ class CommandRouter:
             else:
                 response = "Usage: /edit <filepath> <unified diff>"
 
-        elif cmd.startswith("/bash"):
-            cmd_str = user_input[5:].strip()
-            response = self.agent.tool_registry.execute("run_bash", {"command": cmd_str}) if hasattr(self.agent.tool_registry, 'execute') else "Tool unavailable."
-
-        else:
-            response = f"Unknown command: {user_input}\nType /help for the full list."
+        # === IMPROVED BASH SUPPORT ===
+        elif cmd.startswith(("/run_bash", "/bash", "run_bash")):
+            # Support /run_bash, /bash, and even run_bash without slash in some cases
+            if cmd.startswith("/run_bash"):
+                cmd_str = user_input[9:].strip()   # after "/run_bash "
+            else:
+                cmd_str = user_input[5:].strip()   # after "/bash "
+            
+            if not cmd_str:
+                response = "Usage: /run_bash <command>\nExample: /run_bash ls -la"
+            else:
+                response = self.agent.tool_registry.execute("run_bash", {"command": cmd_str}) if hasattr(self.agent.tool_registry, 'execute') else "Tool unavailable."
 
         # Log command usage
         if response and hasattr(self.agent, 'add'):

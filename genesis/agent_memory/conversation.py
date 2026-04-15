@@ -69,6 +69,15 @@ class ConversationManager:
                 self._log_to_session(sess, user_input, cmd_response)
                 return cmd_response
 
+        # === DIRECT TOOL CALL DETECTION (before sending to LLM) ===
+        lower_input = user_input.strip().lower()
+        if lower_input.startswith(("run_bash ", "/run_bash ", "/bash ")):
+            cmd_str = user_input.split(maxsplit=1)[1] if len(user_input.split()) > 1 else ""
+            if cmd_str and hasattr(self.agent.tool_registry, 'execute'):
+                tool_result = self.agent.tool_registry.execute("run_bash", {"command": cmd_str})
+                self._log_to_session(sess, user_input, tool_result)
+                return f"[Tool Result]\n{tool_result}"
+
         # === EVERY EVENT JOURNAL + USER LEARNING (original vision) ===
         if CONFIG.get("auto_journal_every_event", True):
             try:

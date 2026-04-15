@@ -6,6 +6,7 @@ __pycache__/
 .Python
 venv/
 env/
+.venv/
 *.env
 
 # Genesis runtime data - DO NOT commit
@@ -14,14 +15,30 @@ traces/
 proposed_patches/
 chroma/
 obsidian_vault/raw/
-genesis/obsidian_vault/raw/
+obsidian_vault/attachments/
 
-# Temporary files
+# Temporary / backup files
 *.log
 *.tmp
 *.bak
 *.bak.*
+*.tmp.json
 
 # OS generated
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Development
+*.swp
+*.swo
+.vscode/
+.idea/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Build / packaging
+dist/
+build/
+*.egg-info/

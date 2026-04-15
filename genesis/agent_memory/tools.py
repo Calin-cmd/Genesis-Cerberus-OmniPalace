@@ -5,6 +5,8 @@ Production version with robust path resolution and full news/web search.
 
 from __future__ import annotations
 
+import os
+import re
 import subprocess
 import shlex
 from pathlib import Path
@@ -155,21 +157,27 @@ class ToolRegistry:
             except Exception as e:
                 return f"Wikipedia failed: {e}"
 
-        # Read own code - robust path resolution
+
+        # ==================== READ OWN CODE TOOL ====================
         def _tool_read_own_code(filename: str = None, **kwargs):
+            """Robust read own code with multiple possible roots."""
             possible_roots = [
-                Path(__file__).parent.parent.parent.resolve(),
                 Path.cwd().resolve(),
-                Path("C:/Users/strat/genesis_modular").resolve(),
-                Path.home() / "genesis_modular"
+                Path(__file__).parent.parent.parent.resolve(),
+                STORAGE_DIR.parent.resolve(),
+                Path.home() / "genesis",
+                Path.home() / "genesis_modular",
             ]
 
             if filename:
                 for root in possible_roots:
                     path = root / filename
                     if path.exists():
-                        content = path.read_text(encoding="utf-8")
-                        return f"📄 Content of {filename} ({len(content)} chars):\n\n{content[:4000]}\n... (truncated)"
+                        try:
+                            content = path.read_text(encoding="utf-8")
+                            return f"📄 Content of {filename} ({len(content)} chars):\n\n{content[:4000]}\n... (truncated)"
+                        except Exception as e:
+                            return f"Error reading {filename}: {e}"
                 return f"File not found: {filename} (tried multiple roots)"
 
             # List key files
@@ -180,7 +188,9 @@ class ToolRegistry:
                 "genesis/agent_memory/conversation.py",
                 "genesis/agent_memory/memory.py",
                 "genesis/agent_memory/commands.py",
-                "genesis/self_improvement_daemon.py"
+                "genesis/self_improvement_daemon.py",
+                "genesis/daemons.py",
+                "genesis/cerberus.py"
             ]
             result = "Available source files for self-improvement:\n"
             for f in key_files:
@@ -196,6 +206,7 @@ class ToolRegistry:
                     result += f"• {f} (not found)\n"
             result += "\nExample: read_own_code(filename='genesis/agent_memory/tools.py')"
             return result
+
 
         # Wiki tools
         def _tool_wiki_compile(path: str = None, **kwargs):
@@ -249,18 +260,32 @@ class ToolRegistry:
         log_status(f"[TOOL REGISTRY] {len(self.tools)} tools registered successfully")
 
 # ====================== SAFE HELPERS ======================
+
+import os
+import re   # Added for dangerous pattern matching
+
+
 def _resolve_safe_path(filepath: str) -> Path:
+    """Robust, secure path resolution - no hard-coded user paths."""
     bases = [
         Path.cwd().resolve(),
-        Path(__file__).parent.parent.parent.resolve(),
-        Path("C:/Users/strat/genesis_modular").resolve(),
-        Path.home() / "genesis_modular"
+        Path(__file__).parent.parent.parent.resolve(),  # genesis/ parent
+        STORAGE_DIR.parent.resolve(),                   # .agentic_memory parent
+        Path.home() / "genesis",
     ]
+
     for base in bases:
-        p = (base / filepath).resolve()
-        if p.exists() and str(base) in str(p):
-            return p
-    return Path(filepath).resolve()
+        try:
+            p = (base / filepath).resolve(strict=False)
+            # Security: must be inside one of the allowed bases
+            if any(str(p).startswith(str(b)) for b in bases):
+                return p
+        except:
+            continue
+
+    # Fallback - still try to keep it safe
+    return (STORAGE_DIR / "sandbox" / Path(filepath).name).resolve()
+
 
 def _safe_read_file(filepath: str) -> str:
     try:
@@ -272,6 +297,7 @@ def _safe_read_file(filepath: str) -> str:
     except Exception as e:
         return f"Read failed: {e}"
 
+
 def _safe_write_file(filepath: str, content: str) -> str:
     try:
         safe_path = _resolve_safe_path(filepath)
@@ -281,6 +307,7 @@ def _safe_write_file(filepath: str, content: str) -> str:
         return f"✅ Wrote {len(content)} characters to {filepath}"
     except Exception as e:
         return f"Write failed: {e}"
+
 
 def _safe_edit_file_with_confirmation(filepath: str, diff: str) -> str:
     try:
@@ -323,17 +350,76 @@ def _safe_edit_file_with_confirmation(filepath: str, diff: str) -> str:
         return f"Edit failed: {e}"
 
 def _safe_run_bash(command: str, **kwargs) -> str:
-    whitelist = {"ls", "pwd", "cat", "echo", "head", "tail", "grep", "find", "wc", "date", "whoami"}
-    cmd_lower = command.strip().lower().split()[0] if command.strip() else ""
-    if cmd_lower not in whitelist:
-        return f"❌ Command '{cmd_lower}' not allowed."
-    try:
-        result = subprocess.run(shlex.split(command), capture_output=True, text=True, timeout=10, cwd=STORAGE_DIR / "sandbox")
-        output = result.stdout or result.stderr
-        return f"🖥️ {command}\n{output.strip()[:1500]}"
-    except Exception as e:
-        return f"Bash error: {e}"
+    """
+    Hardened cross-platform shell execution - FIXED for Windows.
+    """
+    if not command or not isinstance(command, str):
+        return "❌ Invalid command."
 
+    original_command = command.strip()
+
+    # Platform detection
+    is_windows = os.name == "nt"
+
+    # === ALLOWED COMMANDS ===
+    if is_windows:
+        ALLOWED_COMMANDS = {"dir", "echo", "type", "findstr", "find", "tree", "date", "time", "whoami", "hostname", "cd"}
+        shell = True
+    else:
+        ALLOWED_COMMANDS = {"ls", "pwd", "cat", "echo", "head", "tail", "grep", "find", "wc", "date", "whoami", "tree"}
+        shell = False
+
+    # Get first word
+    first_word = original_command.split()[0].lower() if original_command else ""
+    if first_word not in ALLOWED_COMMANDS:
+        return f"❌ Command '{first_word}' not allowed.\nAllowed on Windows: dir, echo, type, tree, whoami, etc."
+
+    # Block dangerous patterns
+    dangerous = r'[;&|`$(){}\[\]\\<>]'
+    if re.search(dangerous, original_command):
+        return "❌ Dangerous characters detected and blocked."
+
+    # Sandbox
+    sandbox_dir = STORAGE_DIR / "sandbox"
+    sandbox_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        if is_windows:
+            # Windows: Run through cmd.exe properly
+            full_cmd = f"cmd.exe /c {original_command}"
+            result = subprocess.run(
+                full_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=sandbox_dir,
+            )
+        else:
+            # Linux/macOS
+            parts = shlex.split(original_command)
+            result = subprocess.run(
+                parts,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+                cwd=sandbox_dir,
+            )
+
+        output = (result.stdout or result.stderr or "").strip()[:2500]
+
+        if result.returncode != 0 and not output:
+            return f"🖥️ {original_command} (exit code {result.returncode}) - No output or error occurred."
+
+        return f"🖥️ {original_command}\n{output or 'Command executed successfully.'}"
+
+    except subprocess.TimeoutExpired:
+        return "❌ Command timed out."
+    except FileNotFoundError:
+        return "❌ Shell command not found on this system."
+    except Exception as e:
+        return f"❌ Execution error: {str(e)[:200]}"
 
 if __name__ == "__main__":
     print("ToolRegistry loaded successfully.")
