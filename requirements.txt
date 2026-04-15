@@ -1,0 +1,24 @@
+# Core dependencies
+chromadb
+ollama
+duckduckgo-search
+plyer
+diff-match-patch
+wikipedia-api
+fastapi
+uvicorn
+python-dotenv
+structlog
+
+# Optional but recommended
+psutil
+keyring
+cryptography
+
+# For future graph features
+networkx
+graspologic
+
+# Development / Testing
+pytest
+ruff
