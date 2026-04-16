@@ -10,6 +10,7 @@ import contextlib
 import time
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
+from collections import defaultdict
 
 from ..config import CONFIG, log_status, CORE_FACTS, RAG_MODEL, STORAGE_DIR
 from ..dependencies import HAS_CHROMA
@@ -127,7 +128,7 @@ class AgentMemory:
         with self._daemon_lock:
             yield
 
-    # ====================== PROPERTY DELEGATIONS WITH SETTERS ======================
+    # ====================== COMPLETE PROPERTY DELEGATIONS ======================
     @property
     def level(self): return self.state.level
     @level.setter
@@ -143,8 +144,7 @@ class AgentMemory:
         self.state.mark_dirty()
 
     @property
-    def xp_sources(self): 
-        return self.state.xp_sources
+    def xp_sources(self): return self.state.xp_sources
     @xp_sources.setter
     def xp_sources(self, value): 
         self.state.xp_sources = value
@@ -186,6 +186,21 @@ class AgentMemory:
     def turns_since_last_journal(self): return self.state.turns_since_last_journal
     @turns_since_last_journal.setter
     def turns_since_last_journal(self, value): self.state.turns_since_last_journal = value
+
+    @property
+    def omnipalace_rooms(self): return self.state.omnipalace_rooms
+    @omnipalace_rooms.setter
+    def omnipalace_rooms(self, value): self.state.omnipalace_rooms = value
+
+    @property
+    def active_sub_agents(self): return self.state.active_sub_agents
+    @active_sub_agents.setter
+    def active_sub_agents(self, value): self.state.active_sub_agents = value
+
+    @property
+    def wiki_contributions(self): return self.state.wiki_contributions
+    @wiki_contributions.setter
+    def wiki_contributions(self, value): self.state.wiki_contributions = value
 
     # ====================== STATE METHODS ======================
     def mark_dirty(self): self.state.mark_dirty()
@@ -325,10 +340,12 @@ class AgentMemory:
         return f"{CORE_FACTS}\n\nCurrent real-world time: {now_str}"
 
     def visualize(self) -> str:
+        """Full restored dashboard visualization with topic distribution."""
         d = {
             "wiki_pages": 0,
             "memories_index": len(getattr(self.index, 'index_lines', [])),
             "memories_chroma": getattr(self, 'collection', None).count() if hasattr(self, 'collection') and self.collection else 0,
+            "active_sub_agents": len(getattr(self, 'active_sub_agents', {})),
             "tools_registered": len(self.tool_registry.list_tools()) if self.tool_registry else 0,
             "auto_dream_runs": self.state.stats.get("auto_dream_runs", 0),
             "user_name": self.state.user_name or 'Unknown',
@@ -336,14 +353,33 @@ class AgentMemory:
             "turns": self.state.session_turn_count.get(self.state.current_session, 0)
         }
 
+        topic_counts = defaultdict(int)
+        for line in getattr(self.index, 'index_lines', [])[-500:]:
+            try:
+                topic = line.split(" | ")[1] if " | " in line else "general"
+                topic_counts[topic] += 1
+            except:
+                pass
+
         out = [
             "="*80,
             f"          GENESIS v5.6.9 CERBERUS DASHBOARD — Level {self.level}",
             "="*80,
-            f"XP: {self.total_xp:,} | User: {d['user_name']}",
-            f"Session: {d['current_session']} | Tools: {d['tools_registered']}",
-            "="*80
+            f"XP: {self.total_xp:,} | Progress: {self.get_xp_progress() if hasattr(self, 'get_xp_progress') else 'N/A'} | Policy: {self.stats.get('policy_score', 0.5):.3f}",
+            f"Obsidian Wiki: {d['wiki_pages']} pages | Memories: {d['memories_index']} (index) + {d['memories_chroma']} (Chroma)",
+            f"OmniPalace Rooms: {len(self.omnipalace_rooms)} | Active Sub-Agents: {d['active_sub_agents']}",
+            f"Tools: {d['tools_registered']} | AutoDream: {d['auto_dream_runs']} runs",
+            f"User: {d['user_name']} | Session: {d['current_session']} ({d['turns']} turns)",
+            "="*80,
+            "\nTOPIC DISTRIBUTION (last 500 memories)",
         ]
+
+        for topic, count in sorted(topic_counts.items(), key=lambda x: -x[1])[:15]:
+            bar = "█" * min(count // 4, 30)
+            out.append(f"  • {topic:<25} {bar} {count}")
+
+        out.append("\n" + "="*80)
+        out.append("Type /stats for detailed numbers | /palace for spatial view | /wiki status for vault")
         return "\n".join(out)
 
     def _init_chroma(self):
