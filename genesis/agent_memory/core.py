@@ -127,35 +127,65 @@ class AgentMemory:
         with self._daemon_lock:
             yield
 
-    # ====================== FULL PROPERTY DELEGATIONS ======================
+    # ====================== PROPERTY DELEGATIONS WITH SETTERS ======================
     @property
     def level(self): return self.state.level
+    @level.setter
+    def level(self, value): 
+        self.state.level = value
+        self.state.mark_dirty()
+
     @property
     def total_xp(self): return self.state.total_xp
+    @total_xp.setter
+    def total_xp(self, value): 
+        self.state.total_xp = value
+        self.state.mark_dirty()
+
+    @property
+    def xp_sources(self): 
+        return self.state.xp_sources
+    @xp_sources.setter
+    def xp_sources(self, value): 
+        self.state.xp_sources = value
+        self.state.mark_dirty()
+
+    @property
+    def personality(self): return self.state.personality
+    @personality.setter
+    def personality(self, value): 
+        self.state.personality = value
+        self.state.mark_dirty()
+
     @property
     def user_name(self): return self.state.user_name
+    @user_name.setter
+    def user_name(self, value): self.state.user_name = value
+
     @property
     def current_session(self): return self.state.current_session
+    @current_session.setter
+    def current_session(self, value): self.state.current_session = value
+
     @property
     def stats(self): return self.state.stats
+    @stats.setter
+    def stats(self, value): self.state.stats = value
+
     @property
     def sessions(self): return self.state.sessions
+    @sessions.setter
+    def sessions(self, value): self.state.sessions = value
+
     @property
     def session_turn_count(self): return self.state.session_turn_count
+    @session_turn_count.setter
+    def session_turn_count(self, value): self.state.session_turn_count = value
+
     @property
     def turns_since_last_journal(self): return self.state.turns_since_last_journal
-    @property
-    def last_rag_turn(self): return self.state.last_rag_turn
-    @property
-    def last_date(self): return self.state.last_date
-    @property
-    def omnipalace_rooms(self): return self.state.omnipalace_rooms
-    @property
-    def current_palace_room(self): return self.state.current_palace_room
-    @property
-    def active_sub_agents(self): return self.state.active_sub_agents
-    @property
-    def wiki_contributions(self): return self.state.wiki_contributions
+    @turns_since_last_journal.setter
+    def turns_since_last_journal(self, value): self.state.turns_since_last_journal = value
 
     # ====================== STATE METHODS ======================
     def mark_dirty(self): self.state.mark_dirty()

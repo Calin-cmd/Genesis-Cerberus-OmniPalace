@@ -27,11 +27,10 @@ class AutonomousManager:
         self.agent = agent
 
     def _create_journal_entry(self, force: bool = False) -> str:
-        """Create a useful human-readable journal entry with proper timestamps."""
+        """Create a useful human-readable journal entry."""
         sess = self.agent.current_session
         turns_since = self.agent.turns_since_last_journal.get(sess, 0)
         
-        # Manual /journal is more lenient
         if force and turns_since < 12:
             pass
         elif not force and turns_since < 20:
@@ -43,24 +42,18 @@ class AutonomousManager:
 
         hist = "\n".join([f"User: {t.get('prompt','')} → Genesis: {t.get('response','')[:200]}" for t in recent])
         
-        journal_prompt = f"""Create a clear, human-readable journal entry (120-200 words).
-Include exact real-world timestamp. Summarize what happened in this session: important commands, tool usage, user requests, and outcomes.
-Focus on facts and progress. Be concise but readable.
+        journal_prompt = f"""Create a clear, human-readable journal entry (120-200 words). From your point of view.
+Include exact real-world timestamp. Summarize what happened in this session.
 
 Current real-world time: {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
 History:
 {hist}"""
 
         journal_text = self.agent.call_llm_safe(
-            "You are writing a clear, factual session journal entry for the user to read.",
+            "You are writing a clear, factual session journal entry.",
             journal_prompt,
             model=RAG_MODEL
         )
-
-        # Light filter only for automatic journals
-        if not force and ("harness" in journal_text.lower() or "vault" in journal_text.lower() or len(journal_text) < 60):
-            self.agent.turns_since_last_journal[sess] = 0
-            return "Journal skipped — content was repetitive."
 
         entry_id = self.agent.add(journal_text, topic="journal", importance=0.85, tags=["journal", "session_summary"])
 
@@ -71,11 +64,10 @@ History:
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print(f"\n=== JOURNAL ENTRY CREATED (ID: {entry_id}) @ {timestamp} ===\n{journal_text}\n")
 
-        # === RESTORED ORIGINAL VISION: Archive to Hall of Records on every journal ===
         try:
             archive_session_to_hall_of_records(self.agent, sess, journal_text)
         except Exception as e:
-            print(f"[AUTONOMOUS] Hall of Records archive warning: {e}")
+            print(f"[AUTONOMOUS] Hall of Records warning: {e}")
 
         return journal_text
 

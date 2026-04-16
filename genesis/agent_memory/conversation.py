@@ -267,7 +267,7 @@ Level: {self.agent.level} | Total XP: {self.agent.total_xp}"""
             return self._recent_rag_cache[cache_key]
 
         memories = AdvancedRAG.retrieve_with_parent(self.agent, user_input, n_results=6)
-        recent = self.agent.memory.get_recent_context() if hasattr(self.agent.memory, 'get_recent_context') else ""
+        recent = self.agent.memory.get_recent_context()
 
         wiki_hint = ""
         if hasattr(self.agent.memory, 'wiki'):
@@ -297,7 +297,7 @@ Level: {self.agent.level} | Total XP: {self.agent.total_xp}"""
         # Clear old context after archiving (restored vision)
         if CONFIG.get("context_clear_after_archive", True) and turns > 30:
             if sess in self.agent.sessions:
-                self.agent.sessions[sess] = self.agent.sessions[sess][-8:]  # keep only last 8 turns
+                self.agent.sessions[sess] = self.agent.sessions[sess][-15:]  # keep only last 15 turns
             self.agent.mark_dirty()
 
 if __name__ == "__main__":

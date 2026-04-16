@@ -471,7 +471,7 @@ aliases: ["{title.lower()}"]
         return "\n".join(output)
 
     def ensure_session_tracking(self, sess: str):
-        """Ensure session exists in tracking dicts"""
+        """Ensure session exists in tracking dicts — uses delegation"""
         if sess not in self.agent.sessions:
             self.agent.sessions[sess] = []
         if sess not in self.agent.session_turn_count:
@@ -504,7 +504,7 @@ aliases: ["{title.lower()}"]
             self.agent.mark_dirty()
 
     def get_recent_context(self) -> str:
-        """Helper for conversation context"""
+        """Helper for conversation context — uses delegated properties"""
         recent = self.agent.sessions.get(self.agent.current_session, [])[-10:]
         hist = "\n".join([
             f"User: {t.get('prompt','')} → Genesis: {t.get('response','')[:180]}"

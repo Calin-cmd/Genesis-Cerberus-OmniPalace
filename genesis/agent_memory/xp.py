@@ -24,15 +24,52 @@ class XPManager:
         return int(state.level * 850 + (state.level ** 2) * 140)
 
     def gain_xp(self, amount: int, source: str = "general", reason: str = ""):
-        """Main method to award XP"""
+        """Gain XP and update sources — uses delegated properties."""
         if amount <= 0:
             return
 
-        state = self.agent
-        state.total_xp += amount
-        state.xp_sources[source] += amount
+        # Use setters on AgentMemory
+        self.agent.total_xp += amount
+        self.agent.xp_sources[source] += amount
 
-        self._evolve_personality(source, amount / 900)
+        if reason:
+            self.agent.add(f"XP gained: +{amount} from {source} ({reason})", 
+                          topic="xp", importance=0.7, tags=["xp", source])
+
+        # Occasional personality evolution
+        if random.random() < 0.25:
+            self._evolve_personality(source, amount / 1000)
+
+        self.agent.mark_dirty()
+        self.agent.stats["total_reward"] = self.agent.stats.get("total_reward", 0) + amount
+
+    def apply_feedback(self, cmd: str, entry_id: str = None):
+        """Apply user feedback and award XP."""
+        try:
+            if cmd == "good":
+                xp = 25
+            elif cmd == "important":
+                xp = 60
+            elif cmd == "wrong":
+                xp = -15
+            else:
+                xp = 10
+
+            self.gain_xp(xp, "user_feedback", f"User {cmd} feedback on entry {entry_id or 'unknown'}")
+            
+            message = f"✅ Feedback received. +{xp} XP awarded."
+            print(message)
+            return message
+        except Exception as e:
+            print(f"[XP] Feedback error: {e}")
+            return "Feedback processed with minor issue."
+
+        # Occasional personality evolution
+        if random.random() < 0.3:
+            self._evolve_personality(source, amount / 900)
+
+        self.agent.mark_dirty()
+        self.agent.stats["total_reward"] = self.agent.stats.get("total_reward", 0) + amount
 
         # Level up check
         if state.total_xp >= self._xp_for_next_level():
@@ -107,30 +144,6 @@ class XPManager:
 
         return max(0.88, min(0.97, base + modifier))
 
-    def apply_feedback(self, cmd: str, entry_id: str = None) -> str:
-        """Handle /good, /wrong, /important feedback"""
-        state = self.agent
-        delta = xp = 0.0
-
-        if cmd == "good":
-            delta, xp = 0.18, 38
-            state.stats["good_feedback"] = state.stats.get("good_feedback", 0) + 1
-        elif cmd == "wrong":
-            delta, xp = -0.22, 18
-            state.stats["wrong_feedback"] = state.stats.get("wrong_feedback", 0) + 1
-        elif cmd == "important":
-            delta, xp = 0.32, 68
-            state.stats["important_feedback"] = state.stats.get("important_feedback", 0) + 1
-        else:
-            return "Invalid feedback command."
-
-        old = state.stats.get("policy_score", 0.5)
-        state.stats["policy_score"] = max(0.05, min(0.98, old + delta * 0.12))
-
-        self.gain_xp(int(xp), "user_feedback", f"User {cmd} feedback")
-        self.agent.mark_dirty()
-
-        return f"✅ Feedback ({cmd}) received → Policy: {old:.3f} → {state.stats['policy_score']:.3f} | +{xp} XP"
 
     def show_xp_breakdown(self) -> str:
         """Show detailed XP profile with wiki contribution"""
@@ -207,25 +220,19 @@ class XPManager:
         return "\n".join(output)
 
     def get_stats(self) -> str:
-        """Full rich stats display (restored with session details)"""
-        state = self.agent
-        decay_rate = self.get_decay_rate()
-        wiki_count = getattr(state.memory.wiki, 'count_wiki_pages', lambda: 0)() if hasattr(state.memory, 'wiki') else 0
+        """Return detailed XP and system statistics."""
+        return f"""
+=== GENESIS STATS ===
+Level: {self.agent.level} | Total XP: {self.agent.total_xp:,}
+Progress to next level: {self.agent.get_xp_progress()}
 
-        current_session = state.current_session
-        turns = state.session_turn_count.get(current_session, 0)
-        tokens = state.tokens_used_session
+Personality Traits:
+{chr(10).join([f"  • {k.capitalize()}: {v:.2f}" for k, v in self.agent.personality.items()])}
 
-        return f"""Genesis v5.6.9 Cerberus OmniPalace
-Level {state.level} | Total XP: {state.total_xp:,} | Progress: {self.get_xp_progress() if hasattr(self, 'get_xp_progress') else 'N/A'}
-Policy Score: {state.stats.get('policy_score', 0.5):.3f} (decay rate: {decay_rate:.3f})
-Obsidian Wiki Pages: {wiki_count}
-Current Session: {current_session} ({turns} turns | {tokens:,}/{state.session_budget:,} tokens used)
-
-Feedback: {state.stats.get('good_feedback', 0)} good | {state.stats.get('wrong_feedback', 0)} wrong | {state.stats.get('important_feedback', 0)} important
-Inspiration Bursts: {state.stats.get('inspiration_bursts', 0)}
-AutoDream Runs: {state.stats.get('autodream_runs', 0)}
-Journals Run: {state.stats.get('journals_run', 0)}
+Session: {self.agent.current_session}
+Tokens used this session: {self.agent.state.tokens_used_session}
+Total memories: {len(self.agent.sessions.get(self.agent.current_session, []))}
+Wiki pages: {self.agent.get_wiki_status().get('wiki_pages', 0)}
 """
 
     def show_xp_breakdown(self) -> str:
