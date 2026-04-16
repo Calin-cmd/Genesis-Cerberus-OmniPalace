@@ -11,6 +11,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict
 
+from ..security.encryption import secure_storage
 from ..config import CONFIG, STORAGE_PATH, STORAGE_DIR
 
 
@@ -24,7 +25,7 @@ class AgentState:
     session_budget: int = CONFIG.get("session_budget", 120000)
     tokens_used_session: int = 0
 
-    # Statistics
+    # Consolidated Statistics (single definition)
     stats: Dict = field(default_factory=lambda: {
         "total_memories": 0, "total_sessions": 0, "journals_run": 0,
         "predictions_run": 0, "coherences_run": 0, "decays_run": 0,
@@ -33,6 +34,7 @@ class AgentState:
         "contradictions_detected": 0, "facts_merged": 0, "facts_archived": 0,
         "auto_dream_runs": 0, "proactive_runs": 0, "inspiration_bursts": 0,
         "wiki_compiles": 0, "wiki_heals": 0,
+        "palace_growth_events": 0
     })
 
     # XP & Personality
@@ -68,7 +70,7 @@ class AgentState:
     # Advanced fields
     omnipalace_rooms: Dict[str, Dict] = field(default_factory=dict)
     current_palace_room: str = "Entrance Hall"
-    active_sub_agents: Dict[str, Dict] = field(default_factory=dict)
+    active_sub_agents: list = field(default_factory=list)
     persistent_sub_agents: Dict[str, Dict] = field(default_factory=dict)
     wiki_contributions: int = 0
 
@@ -87,7 +89,7 @@ class AgentState:
                 "current_session": self.current_session,
                 "session_budget": self.session_budget,
                 "tokens_used_session": self.tokens_used_session,
-                "stats": self.stats,
+                "stats": dict(self.stats),          # ensure full dict
                 "sessions": self.sessions,
                 "user_name": self.user_name,
                 "session_turn_count": self.session_turn_count,
@@ -101,45 +103,51 @@ class AgentState:
                 "omnipalace_rooms": self.omnipalace_rooms,
                 "current_palace_room": self.current_palace_room,
                 "wiki_contributions": self.wiki_contributions,
+                "active_sub_agents": self.active_sub_agents,
+                "persistent_sub_agents": self.persistent_sub_agents,
             }
-            tmp = STORAGE_PATH.with_suffix(".tmp")
-            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
-            tmp.replace(STORAGE_PATH)
+
+            from ..security.encryption import secure_storage
+            secure_storage.save_encrypted(STORAGE_PATH, data)
             self._dirty = False
             return True
         except Exception as e:
-            print(f"[SAVE ERROR] {e}")
+            print(f"[ENCRYPTED SAVE ERROR] {e}")
             return False
 
     @classmethod
     def load(cls) -> "AgentState":
+        from ..security.encryption import secure_storage
         if not STORAGE_PATH.exists():
             return cls()
         try:
-            raw = json.loads(STORAGE_PATH.read_text(encoding="utf-8"))
+            data = secure_storage.load_encrypted(STORAGE_PATH)
             instance = cls()
-            instance.current_session = raw.get("current_session", "default")
-            instance.session_budget = raw.get("session_budget", CONFIG.get("session_budget", 120000))
-            instance.tokens_used_session = raw.get("tokens_used_session", 0)
-            instance.stats.update(raw.get("stats", {}))
-            instance.sessions = raw.get("sessions", {})
-            instance.user_name = raw.get("user_name", "")
-            instance.session_turn_count = raw.get("session_turn_count", {})
-            instance.turns_since_last_journal = raw.get("turns_since_last_journal", {})
-            if "last_date" in raw:
-                instance.last_date = date.fromisoformat(raw["last_date"])
-            if "last_rag_turn" in raw:
-                instance.last_rag_turn = raw["last_rag_turn"]
-            if "total_xp" in raw:
-                instance.total_xp = raw["total_xp"]
-                instance.level = raw.get("level", 1)
-                instance.xp_sources = defaultdict(int, raw.get("xp_sources", {}))
-                instance.personality = raw.get("personality", instance.personality)
-            instance.omnipalace_rooms = raw.get("omnipalace_rooms", {})
-            instance.current_palace_room = raw.get("current_palace_room", "Entrance Hall")
-            instance.wiki_contributions = raw.get("wiki_contributions", 0)
+            instance.current_session = data.get("current_session", "default")
+            instance.session_budget = data.get("session_budget", CONFIG.get("session_budget", 120000))
+            instance.tokens_used_session = data.get("tokens_used_session", 0)
+            instance.stats.update(data.get("stats", {}))
+            instance.sessions = data.get("sessions", {})
+            instance.user_name = data.get("user_name", "")
+            instance.session_turn_count = data.get("session_turn_count", {})
+            instance.turns_since_last_journal = data.get("turns_since_last_journal", {})
+            if "last_date" in data:
+                instance.last_date = date.fromisoformat(data["last_date"])
+            if "last_rag_turn" in data:
+                instance.last_rag_turn = data["last_rag_turn"]
+            if "total_xp" in data:
+                instance.total_xp = data["total_xp"]
+                instance.level = data.get("level", 1)
+                instance.xp_sources = defaultdict(int, data.get("xp_sources", {}))
+                instance.personality = data.get("personality", instance.personality)
+            instance.omnipalace_rooms = data.get("omnipalace_rooms", {})
+            instance.current_palace_room = data.get("current_palace_room", "Entrance Hall")
+            instance.wiki_contributions = data.get("wiki_contributions", 0)
+            instance.active_sub_agents = data.get("active_sub_agents", [])
+            instance.persistent_sub_agents = data.get("persistent_sub_agents", {})
             instance._dirty = False
+            print("[ENCRYPTION] Memory loaded successfully (encrypted)")
             return instance
         except Exception as e:
-            print(f"[LOAD FAIL] {e}")
+            print(f"[ENCRYPTED LOAD FAIL] {e} — Starting fresh")
             return cls()

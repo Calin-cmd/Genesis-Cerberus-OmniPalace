@@ -9,7 +9,6 @@ import sys
 import threading
 import signal
 from pathlib import Path
-import atexit
 
 # Robust import setup
 ROOT_DIR = Path(__file__).parent.resolve()
@@ -28,10 +27,29 @@ from genesis.dependencies import HAS_FASTAPI
 
 def signal_handler(sig, frame):
     """Graceful shutdown handler"""
-    print("\n👋 Received shutdown signal. Saving state and stopping daemons...")
-    # Daemons will be stopped via their stop() methods in the finally block
+    print("\n👋 Received shutdown signal (Ctrl+C). Saving state...")
+    graceful_shutdown()
     sys.exit(0)
 
+
+def graceful_shutdown():
+    print("\n👋 Received shutdown signal. Saving state and stopping daemons...")
+    print("[SHUTDOWN] Performing final encrypted save...")
+
+    try:
+        if 'agent' in globals() and agent is not None:
+            if hasattr(agent, 'autonomous') and hasattr(agent.autonomous, '_create_journal_entry'):
+                try:
+                    agent.autonomous._create_journal_entry(force=True)
+                except:
+                    pass
+            agent.save()
+            print("[SHUTDOWN] Final encrypted save completed.")
+            print("[SHUTDOWN] Genesis v5.6.9 shut down gracefully. Goodbye!")
+        else:
+            print("[SHUTDOWN] No active agent found.")
+    except Exception as e:
+        print(f"[SHUTDOWN] Error during final save: {e}")
 
 def main() -> int:
     parser = argparse.ArgumentParser(
@@ -50,7 +68,7 @@ def main() -> int:
 
     print("[GENESIS] Starting v5.6.9 Cerberus OmniPalace...")
 
-    # Load agent with new persistence layer
+    # Load agent
     try:
         agent: AgentMemory = AgentMemory.load()
         wiki_count = agent.get_wiki_status().get("wiki_pages", 0)
@@ -62,10 +80,8 @@ def main() -> int:
 
     print("[Genesis] Persistent memory, OmniPalace, and Hall of Records fully active.")
 
-    # Initialize conversation manager
     conversation = ConversationManager(agent)
 
-    # Start background daemons unless disabled
     if not args.no_daemons:
         print("[DAEMONS] BackgroundSaver, AutoDream, and Scheduler started")
     else:
@@ -73,7 +89,7 @@ def main() -> int:
 
     print(f"[CORE] AgentMemory initialized — Level {agent.level} | Tools: {len(agent.tool_registry.list_tools()) if hasattr(agent, 'tool_registry') else 0}")
 
-    # Start webhook server in background
+    # Start webhook server
     try:
         webhook_thread = threading.Thread(target=start_webhook_server, daemon=True)
         webhook_thread.start()
@@ -82,14 +98,9 @@ def main() -> int:
         print(f"[WEBHOOK] Failed to start: {e}")
 
     # Start FastAPI if requested
-    api_thread = None
     if args.api and HAS_FASTAPI:
         try:
-            api_thread = threading.Thread(
-                target=run_api_server, 
-                args=(agent, args.api_port), 
-                daemon=True
-            )
+            api_thread = threading.Thread(target=run_api_server, args=(agent, args.api_port), daemon=True)
             api_thread.start()
             print(f"[API] FastAPI server starting on port {args.api_port}")
         except Exception as e:
@@ -116,27 +127,6 @@ def main() -> int:
 
             turn_counter += 1
 
-            # /new handling with proper archiving
-            if line == "/new":
-                print("[SESSION] Archiving current session before reset...")
-                if hasattr(agent.autonomous, '_create_journal_entry'):
-                    agent.autonomous._create_journal_entry(force=True)
-                archived = agent.memory.cleanup_old_memories() if hasattr(agent.memory, 'cleanup_old_memories') else 0
-                print(f"[SESSION] Archived {archived} items")
-                agent.reset_session(hard_reset=False)
-                continue
-
-            # Quick mode toggles
-            if line == "/fast":
-                CONFIG["quick_mode"] = True
-                print("⚡ Quick Mode Enabled")
-                continue
-            elif line == "/full":
-                CONFIG["quick_mode"] = False
-                print("🧠 Full Mode Enabled")
-                continue
-
-            # Main response generation
             response = conversation.generate(line)
             if response:
                 print(f"\nGenesis: {response}\n")
@@ -152,30 +142,10 @@ def main() -> int:
                 agent.mark_dirty()
 
     finally:
-        # Final shutdown actions
-        print("[SHUTDOWN] Performing final save...")
-        agent.save()
-        if hasattr(agent.autonomous, '_create_journal_entry'):
-            agent.autonomous._create_journal_entry(force=True)
-        print("[SHUTDOWN] Genesis v5.6.9 shut down gracefully. Goodbye!")
+        graceful_shutdown()
     
     return 0
 
-# === RESTORED ORIGINAL VISION: Graceful shutdown with final journal + archive ===
-def graceful_shutdown():
-    print("\n[SHUTDOWN] Genesis shutting down gracefully...")
-    try:
-        if hasattr(agent, 'autonomous'):
-            print("[SHUTDOWN] Creating final journal entry...")
-            agent.autonomous._create_journal_entry(force=True)
-        if hasattr(agent, 'save'):
-            print("[SHUTDOWN] Saving persistent state...")
-            agent.save()
-        print("[SHUTDOWN] Hall of Records archive complete. Goodbye.")
-    except Exception as e:
-        print(f"[SHUTDOWN] Error during final save: {e}")
-
-atexit.register(graceful_shutdown)
 
 if __name__ == "__main__":
     sys.exit(main())

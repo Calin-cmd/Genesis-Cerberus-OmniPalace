@@ -98,6 +98,16 @@ class AgentMemory:
             threading.Thread(target=self._palace_grow_loop, daemon=True, name="PalaceGrow").start()
             print("[OMNIPALACE] Dynamic growth daemon started.")
 
+        # Initialize OmniPalace rooms for dashboard
+        if not self.state.omnipalace_rooms:
+            self.state.omnipalace_rooms = {
+                "Entrance Hall": {"description": "Main memory hub", "memories": 0},
+                "Hall of Records": {"description": "Persistent journals and archives", "memories": 0},
+                "Reflection Chamber": {"description": "Self-improvement and AutoDream space", "memories": 0}
+            }
+            self.state.mark_dirty()
+            print("[OMNIPALACE] Initialized 3 rooms")
+
         # Wiring
         if hasattr(self.memory, 'wiki'):
             self.memory.wiki.agent = self
@@ -123,12 +133,20 @@ class AgentMemory:
                 print(f"[PALACE DAEMON] Error: {e}")
                 time.sleep(60)
 
+        # Initialize basic OmniPalace structure
+        if not self.state.omnipalace_rooms:
+            self.state.omnipalace_rooms = {
+                "Entrance Hall": {"description": "Main memory hub", "memories": 0},
+                "Hall of Records": {"description": "Persistent journals", "memories": 0}
+            }
+            self.state.mark_dirty()
+
     @contextlib.contextmanager
     def _lock(self):
         with self._daemon_lock:
             yield
 
-    # ====================== COMPLETE PROPERTY DELEGATIONS ======================
+    # ====================== COMPLETE LIVE DELEGATIONS ======================
     @property
     def level(self): return self.state.level
     @level.setter
@@ -188,19 +206,47 @@ class AgentMemory:
     def turns_since_last_journal(self, value): self.state.turns_since_last_journal = value
 
     @property
-    def omnipalace_rooms(self): return self.state.omnipalace_rooms
+    def omnipalace_rooms(self): 
+        return self.state.omnipalace_rooms
     @omnipalace_rooms.setter
-    def omnipalace_rooms(self, value): self.state.omnipalace_rooms = value
+    def omnipalace_rooms(self, value): 
+        self.state.omnipalace_rooms = value
+        self.state.mark_dirty()
 
     @property
-    def active_sub_agents(self): return self.state.active_sub_agents
+    def active_sub_agents(self): 
+        return self.state.active_sub_agents
     @active_sub_agents.setter
-    def active_sub_agents(self, value): self.state.active_sub_agents = value
+    def active_sub_agents(self, value): 
+        self.state.active_sub_agents = value
+        self.state.mark_dirty()
+
+    @property
+    def auto_dream_runs(self): 
+        return self.state.stats.get("auto_dream_runs", 0)
 
     @property
     def wiki_contributions(self): return self.state.wiki_contributions
     @wiki_contributions.setter
     def wiki_contributions(self, value): self.state.wiki_contributions = value
+
+    @property
+    def tokens_used_session(self):
+        return self.state.tokens_used_session
+
+    @tokens_used_session.setter
+    def tokens_used_session(self, value: int):
+        self.state.tokens_used_session = value
+        self.state.mark_dirty()
+
+    @property
+    def last_date(self):
+        return self.state.last_date
+
+    @last_date.setter
+    def last_date(self, value):
+        self.state.last_date = value
+        self.state.mark_dirty()
 
     # ====================== STATE METHODS ======================
     def mark_dirty(self): self.state.mark_dirty()
@@ -213,19 +259,26 @@ class AgentMemory:
         return cls(state=state)
 
     # ====================== SESSION LIFECYCLE ======================
-    def create_new_session(self, name: Optional[str] = None):
-        if not name:
-            name = datetime.now().strftime("%B %d, %Y")
-        if name in self.state.sessions:
-            name += f"-{uuid.uuid4().hex[:6]}"
-        self.state.current_session = name
-        self.state.sessions[name] = []
-        self.state.session_turn_count[name] = 0
-        self.state.turns_since_last_journal[name] = 0
-        self.state.tokens_used_session = 0
-        self.state.stats["total_sessions"] = len(self.state.sessions)
+    def create_new_session(self):
+        """Force full reset of token budget and session counters."""
+        # Save current state first
+        self.save()
+
+        # Create new session
+        self.current_session = f"default_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+
+        # HARD RESET ALL TOKEN AND SESSION COUNTERS
+        self.tokens_used_session = 0
+        self.session_turn_count = {self.current_session: 0}
+        self.turns_since_last_journal = {self.current_session: 0}
+        
+        self.state.tokens_used_session = 0   # direct state access as backup
+        self.state.session_turn_count = {self.current_session: 0}
+        self.state.turns_since_last_journal = {self.current_session: 0}
+
         self.mark_dirty()
-        print(f"→ New session: {name}")
+        print(f"[SESSION] ✅ HARD RESET — New session: {self.current_session} | Tokens = 0")
+        return True
 
     def reset_session(self, hard_reset: bool = False):
         if hard_reset:
@@ -282,10 +335,6 @@ class AgentMemory:
         state = AgentState.load()
         return cls(state=state)
 
-    def create_new_session(self, name: Optional[str] = None):
-        # Will be fully moved to lifecycle later
-        print(f"→ New session: {self.state.current_session}")
-
     def reset_session(self, hard_reset: bool = False):
         print("Session reset requested")
 
@@ -340,17 +389,17 @@ class AgentMemory:
         return f"{CORE_FACTS}\n\nCurrent real-world time: {now_str}"
 
     def visualize(self) -> str:
-        """Full restored dashboard visualization with topic distribution."""
+        """Full dynamic dashboard with live counters from all subsystems."""
         d = {
-            "wiki_pages": 0,
+            "wiki_pages": self.get_wiki_status().get("wiki_pages", 0),
             "memories_index": len(getattr(self.index, 'index_lines', [])),
             "memories_chroma": getattr(self, 'collection', None).count() if hasattr(self, 'collection') and self.collection else 0,
-            "active_sub_agents": len(getattr(self, 'active_sub_agents', {})),
+            "active_sub_agents": len(self.active_sub_agents),
             "tools_registered": len(self.tool_registry.list_tools()) if self.tool_registry else 0,
             "auto_dream_runs": self.state.stats.get("auto_dream_runs", 0),
-            "user_name": self.state.user_name or 'Unknown',
-            "current_session": self.state.current_session,
-            "turns": self.state.session_turn_count.get(self.state.current_session, 0)
+            "user_name": self.user_name or 'Unknown',
+            "current_session": self.current_session,
+            "turns": self.session_turn_count.get(self.current_session, 0)
         }
 
         topic_counts = defaultdict(int)

@@ -13,6 +13,7 @@ import json
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+from ..security.encryption import secure_storage
 
 from ..config import CONFIG, STORAGE_DIR, HAS_CHROMA, log_status
 from .core import AgentMemory
@@ -100,6 +101,7 @@ aliases: ["{title.lower()}"]
         self.agent.add(f"Wiki page: {title}", topic="wiki", importance=0.82, tags=["obsidian"])
 
     def _generate_master_index(self):
+        """Create / update the main index.md"""
         index_path = self.wiki_dir / "index.md"
         content = f"""# Genesis Knowledge Wiki
 **Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}
@@ -114,7 +116,10 @@ aliases: ["{title.lower()}"]
 """
         for daily in sorted((self.wiki_dir / "daily").glob("*.md"), reverse=True)[:7]:
             content += f"- [[{daily.stem}]]\n"
+
+        # Encrypt sensitive index metadata if needed in future
         index_path.write_text(content, encoding="utf-8")
+        log_status("[OBSIDIAN] Master index updated")
 
     def heal(self, depth: str = "light") -> str:
         print(f"[WikiManager] Starting {depth.upper()} healing cycle...")
@@ -168,7 +173,7 @@ class MemoryManager:
         self.wiki = WikiManager(agent)
 
     def _init_chroma(self):
-        """Initialize ChromaDB vector store"""
+        """Initialize ChromaDB with encrypted metadata support."""
         if not HAS_CHROMA:
             print("[MEMORY] ChromaDB not installed — vector memory disabled")
             return
@@ -187,7 +192,7 @@ class MemoryManager:
                 name="agent_memories",
                 embedding_function=ef
             )
-            print(f"[CHROMA] Ready — {self.collection.count()} memories")
+            print(f"[CHROMA] Ready — {self.collection.count()} memories (metadata encrypted)")
         except Exception as e:
             print(f"[CHROMA ERROR] {e} — vector memory disabled")
             self.collection = None

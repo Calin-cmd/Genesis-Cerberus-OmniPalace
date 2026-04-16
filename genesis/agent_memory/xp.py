@@ -230,7 +230,7 @@ Personality Traits:
 {chr(10).join([f"  • {k.capitalize()}: {v:.2f}" for k, v in self.agent.personality.items()])}
 
 Session: {self.agent.current_session}
-Tokens used this session: {self.agent.state.tokens_used_session}
+Tokens used this session: {getattr(self.agent.state, 'tokens_used_session', 0)}
 Total memories: {len(self.agent.sessions.get(self.agent.current_session, []))}
 Wiki pages: {self.agent.get_wiki_status().get('wiki_pages', 0)}
 """

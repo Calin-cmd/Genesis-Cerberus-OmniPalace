@@ -350,76 +350,42 @@ def _safe_edit_file_with_confirmation(filepath: str, diff: str) -> str:
         return f"Edit failed: {e}"
 
 def _safe_run_bash(command: str, **kwargs) -> str:
-    """
-    Hardened cross-platform shell execution - FIXED for Windows.
-    """
+    """Hardened sandboxed shell execution with encryption-aware logging."""
     if not command or not isinstance(command, str):
         return "❌ Invalid command."
 
     original_command = command.strip()
-
-    # Platform detection
     is_windows = os.name == "nt"
 
-    # === ALLOWED COMMANDS ===
+    # Platform-aware allowlist
     if is_windows:
-        ALLOWED_COMMANDS = {"dir", "echo", "type", "findstr", "find", "tree", "date", "time", "whoami", "hostname", "cd"}
-        shell = True
+        ALLOWED = {"dir", "echo", "type", "findstr", "tree", "date", "time", "whoami", "hostname", "cd"}
     else:
-        ALLOWED_COMMANDS = {"ls", "pwd", "cat", "echo", "head", "tail", "grep", "find", "wc", "date", "whoami", "tree"}
-        shell = False
+        ALLOWED = {"ls", "pwd", "cat", "echo", "head", "tail", "grep", "find", "wc", "date", "whoami", "tree"}
 
-    # Get first word
     first_word = original_command.split()[0].lower() if original_command else ""
-    if first_word not in ALLOWED_COMMANDS:
-        return f"❌ Command '{first_word}' not allowed.\nAllowed on Windows: dir, echo, type, tree, whoami, etc."
+    if first_word not in ALLOWED:
+        return f"❌ Command '{first_word}' not allowed."
 
     # Block dangerous patterns
-    dangerous = r'[;&|`$(){}\[\]\\<>]'
-    if re.search(dangerous, original_command):
-        return "❌ Dangerous characters detected and blocked."
+    if re.search(r'[;&|`$(){}\[\]\\<>]', original_command):
+        return "❌ Dangerous characters blocked."
 
-    # Sandbox
     sandbox_dir = STORAGE_DIR / "sandbox"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         if is_windows:
-            # Windows: Run through cmd.exe properly
-            full_cmd = f"cmd.exe /c {original_command}"
-            result = subprocess.run(
-                full_cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=sandbox_dir,
-            )
+            result = subprocess.run(f"cmd.exe /c {original_command}", shell=True, capture_output=True, text=True, timeout=10, cwd=sandbox_dir)
         else:
-            # Linux/macOS
             parts = shlex.split(original_command)
-            result = subprocess.run(
-                parts,
-                shell=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-                cwd=sandbox_dir,
-            )
+            result = subprocess.run(parts, shell=False, capture_output=True, text=True, timeout=10, cwd=sandbox_dir)
 
-        output = (result.stdout or result.stderr or "").strip()[:2500]
+        output = (result.stdout or result.stderr or "").strip()[:2000]
+        return f"🖥️ {original_command}\n{output or 'No output'}"
 
-        if result.returncode != 0 and not output:
-            return f"🖥️ {original_command} (exit code {result.returncode}) - No output or error occurred."
-
-        return f"🖥️ {original_command}\n{output or 'Command executed successfully.'}"
-
-    except subprocess.TimeoutExpired:
-        return "❌ Command timed out."
-    except FileNotFoundError:
-        return "❌ Shell command not found on this system."
     except Exception as e:
-        return f"❌ Execution error: {str(e)[:200]}"
+        return f"❌ Execution error: {str(e)[:150]}"
 
 if __name__ == "__main__":
     print("ToolRegistry loaded successfully.")

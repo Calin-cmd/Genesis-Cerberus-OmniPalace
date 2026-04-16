@@ -34,16 +34,31 @@ class ConversationManager:
         if not user_input or not user_input.strip():
             return "Please provide a message."
 
+        # /new command first (highest priority)
+        if user_input.strip() == "/new":
+            print("[SESSION] Archiving current session before reset...")
+            try:
+                if hasattr(self.agent, 'autonomous') and hasattr(self.agent.autonomous, '_create_journal_entry'):
+                    self.agent.autonomous._create_journal_entry(force=True)
+                if hasattr(self.agent, 'create_new_session'):
+                    self.agent.create_new_session()
+                print("→ New session started. Token budget reset.")
+            except Exception as e:
+                print(f"[SESSION RESET ERROR] {e}")
+            return "→ New session started. Token budget reset."
+
+        # Session setup
+        sess = self.agent.current_session
+        turns = self.agent.session_turn_count.get(sess, 0) + 1
+        self.agent.session_turn_count[sess] = turns
+        self.agent.tokens_used_session += len(user_input) + 50  # rough per-turn cost
+        self.agent.mark_dirty()
+
         # Auto new session on new calendar day
         today = date.today()
         if getattr(self.agent, 'last_date', date(2020, 1, 1)) < today:
             self.agent.create_new_session()
             self.agent.last_date = today
-
-        sess = self.agent.current_session
-        turns = self.agent.session_turn_count.get(sess, 0) + 1
-        self.agent.session_turn_count[sess] = turns
-        self.agent.mark_dirty()
 
         # Notify Claw of user activity
         if hasattr(self.agent, 'claw') and hasattr(self.agent.claw, 'record_user_activity'):
@@ -62,7 +77,7 @@ class ConversationManager:
         if any(kw in lower_input for kw in ["read your own code", "read_own_code", "improve yourself", "edit your code", "upgrade yourself", "self improvement"]):
             return self._handle_self_improvement(user_input)
 
-        # Command handling first
+        # Command handling for /good, /wrong, /important, etc.
         if hasattr(self.agent, 'commands') and self.agent.commands:
             cmd_response = self.agent.commands.handle(user_input)
             if cmd_response is not None:
@@ -247,6 +262,9 @@ Level: {self.agent.level} | Total XP: {self.agent.total_xp}"""
                 pass
 
         self.agent.mark_dirty()
+
+        # Increment token usage (rough estimate)
+        self.agent.tokens_used_session += len(user_input) + 50  # rough per-turn cost
 
     def _handle_self_improvement(self, user_input: str) -> str:
         print("[SELF-IMPROVEMENT] Detected.")

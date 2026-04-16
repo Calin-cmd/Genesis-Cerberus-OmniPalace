@@ -244,6 +244,11 @@ History:
         print(f"[AUTODREAM] Cycle completed @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.agent.mark_dirty()
 
+        # Track runs for dashboard
+        self.agent.state.stats["auto_dream_runs"] += 1
+        self.agent.state.mark_dirty()
+        print(f"[AUTODREAM] Cycle completed — Total runs: {self.agent.state.stats['auto_dream_runs']}")
+
     def run_daemons(self):
         """Run one cycle of all autonomous daemons."""
         if not CONFIG.get("self_nudging_enabled", True):
