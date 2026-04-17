@@ -88,11 +88,31 @@ class CommandRouter:
         elif cmd == "/improve-auto":
             response = self.agent.autonomous.run_self_improvement_cycle() if hasattr(self.agent.autonomous, 'run_self_improvement_cycle') else "Self-improvement unavailable."
 
-        # ====================== FEEDBACK ======================
+        # ====================== FEEDBACK & CLAW SAFETY ======================
         elif cmd.startswith(("/good", "/wrong", "/important")):
             action = cmd.split()[0][1:]
             entry_id = cmd.split()[1] if len(cmd.split()) > 1 else None
             response = self.agent.apply_feedback(action, entry_id) if hasattr(self.agent, 'apply_feedback') else "Feedback system initializing..."
+
+        # === CLAW SAFETY COMMANDS ===
+        elif cmd == "/approve":
+            if (hasattr(self.agent, 'autonomous') and 
+                hasattr(self.agent.autonomous, 'claw_safety') and 
+                self.agent.autonomous.claw_safety):
+                result = self.agent.autonomous.claw_safety.approve_patch()
+                self.agent.gain_xp(30, "claw_approval", "Claw patch approved")
+                response = f"✅ {result}\n\n🎉 Improvement approved and logged. +30 XP awarded."
+            else:
+                response = "🛡️ No active Claw review to approve."
+
+        elif cmd == "/reject":
+            if (hasattr(self.agent, 'autonomous') and 
+                hasattr(self.agent.autonomous, 'claw_safety') and 
+                self.agent.autonomous.claw_safety):
+                result = self.agent.autonomous.claw_safety.reject_patch()
+                response = f"🛡️ {result}"
+            else:
+                response = "🛡️ No active Claw review to reject."
 
         # ====================== SCHEDULING ======================
         elif cmd.startswith("/schedule"):

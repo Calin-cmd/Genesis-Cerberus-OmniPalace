@@ -76,17 +76,18 @@ class AgentMemory:
         self.memory = MemoryManager(self)
         self.cerberus = CerberusOrchestrator(self)
         self.omnipalace = OmniPalaceManager(self)
-        self.autonomous = AutonomousManager(self)
+
+        # Subsystems - Daemons
+        self.background_saver = BackgroundSaver(self)
+        self.auto_dream = AutoDreamDaemon(self)
+        self.scheduler = ProactiveScheduler(self)
+        self.autonomous = AutonomousManager(self)      # This now includes ClawSafety
         self.tool_registry = ToolRegistry(self)
         self.commands = CommandRouter(self)
         self.user_model = UserModelManager(self)
         self.llm = LLMManager(self)
         self.xp = XPManager(self)
-
-        self.background_saver = BackgroundSaver(self)
-        self.auto_dream = AutoDreamDaemon(self)
-        self.scheduler = ProactiveScheduler(self)
-        self.claw = SelfImprovementDaemon(self)
+        # Claw is now handled inside AutonomousManager (via self.claw_safety)
 
         # User name protection
         if not self.state.user_name or self.state.user_name.lower() == "genesis":
@@ -264,15 +265,16 @@ class AgentMemory:
         # Save current state first
         self.save()
 
-        # Create new session
+        # New session
         self.current_session = f"default_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        # HARD RESET ALL TOKEN AND SESSION COUNTERS
+        # HARD RESET
         self.tokens_used_session = 0
         self.session_turn_count = {self.current_session: 0}
         self.turns_since_last_journal = {self.current_session: 0}
         
-        self.state.tokens_used_session = 0   # direct state access as backup
+        # Direct state reset as backup
+        self.state.tokens_used_session = 0
         self.state.session_turn_count = {self.current_session: 0}
         self.state.turns_since_last_journal = {self.current_session: 0}
 

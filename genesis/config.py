@@ -189,7 +189,7 @@ def log_status(msg: str) -> None:
 
 # ====================== HELP TEXT ======================
 HELP_TEXT = textwrap.dedent("""
-    Genesis v5.6.9 Cerberus — OmniPalace
+    Genesis v5.6.9 Cerberus OmniPalace
     /help                    - Short list
     /full help               - List full commands
     /stats                   - Memory statistics
@@ -205,7 +205,7 @@ HELP_TEXT = textwrap.dedent("""
 
 FULL_HELP_TEXT = textwrap.dedent("""\
     ═══════════════════════════════════════════════════════════════
-    GENESIS v5.6.9 CERBERUS — FULL USER COMMAND LIST
+    GENESIS v5.6.9 CERBERUS OMNIPALCE — FULL USER COMMAND LIST
     ═══════════════════════════════════════════════════════════════
 
     Core & Session
@@ -245,6 +245,8 @@ FULL_HELP_TEXT = textwrap.dedent("""\
     /cerberus on             - Enable Cerberus multi-agent mode
     /cerberus off            - Disable Cerberus
     /apply_claw <id>         - Apply a proposed Claw patch (from proposed_patches/)
+    /approve                 - Approve and apply latest Claw suggestion
+    /reject                  - Reject the latest Claw suggestion
 
     Memory Mode
     /fast                    - Quick mode (less RAG)

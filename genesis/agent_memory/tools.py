@@ -79,6 +79,10 @@ class ToolRegistry:
         def _tool_music(style: str = "focus", **kwargs):
             return ProactiveTools.play_music(style) or f"Music mode: {style}"
 
+        def _tool_list_tools(**kwargs):
+            tools = self.list_tools()
+            return f"Available tools ({len(tools)}): " + ", ".join(sorted(tools))
+
         # Web search
         def _tool_web_search(query: str = "", max_results: int = 6, **kwargs):
             if not query or len(query.strip()) < 3:
@@ -231,7 +235,6 @@ class ToolRegistry:
         def _tool_run_bash(command: str, **kwargs):
             return _safe_run_bash(command)
 
-        # Register all tools
         registrations = [
             ("notify", {}, _tool_notify),
             ("schedule", {}, _tool_schedule),
@@ -251,7 +254,8 @@ class ToolRegistry:
             ("read_file", {}, _tool_read_file),
             ("write_file", {}, _tool_write_file),
             ("edit_file", {}, _tool_edit_file),
-            ("run_bash", {}, _tool_run_bash),
+            ("run_bash", {"command": str}, _safe_run_bash),
+            ("list_tools", {}, _tool_list_tools),   
         ]
 
         for name, schema, func in registrations:
@@ -350,41 +354,60 @@ def _safe_edit_file_with_confirmation(filepath: str, diff: str) -> str:
         return f"Edit failed: {e}"
 
 def _safe_run_bash(command: str, **kwargs) -> str:
-    """Hardened sandboxed shell execution with encryption-aware logging."""
+    """Hardened sandboxed shell execution with strict limits and logging."""
     if not command or not isinstance(command, str):
         return "❌ Invalid command."
 
     original_command = command.strip()
     is_windows = os.name == "nt"
 
-    # Platform-aware allowlist
+    # Strict allowlist
     if is_windows:
-        ALLOWED = {"dir", "echo", "type", "findstr", "tree", "date", "time", "whoami", "hostname", "cd"}
+        ALLOWED = {"dir", "echo", "type", "findstr", "tree", "date", "time", "whoami", "hostname", "cd", "cls"}
     else:
         ALLOWED = {"ls", "pwd", "cat", "echo", "head", "tail", "grep", "find", "wc", "date", "whoami", "tree"}
 
     first_word = original_command.split()[0].lower() if original_command else ""
     if first_word not in ALLOWED:
-        return f"❌ Command '{first_word}' not allowed."
+        return f"❌ Command '{first_word}' not allowed in sandbox."
 
     # Block dangerous patterns
-    if re.search(r'[;&|`$(){}\[\]\\<>]', original_command):
-        return "❌ Dangerous characters blocked."
+    dangerous = re.compile(r'[;&|`$(){}\[\]\\<>]|rm|del|format|shutdown|poweroff', re.IGNORECASE)
+    if dangerous.search(original_command):
+        return "❌ Dangerous command blocked for safety."
 
     sandbox_dir = STORAGE_DIR / "sandbox"
     sandbox_dir.mkdir(parents=True, exist_ok=True)
 
     try:
         if is_windows:
-            result = subprocess.run(f"cmd.exe /c {original_command}", shell=True, capture_output=True, text=True, timeout=10, cwd=sandbox_dir)
+            result = subprocess.run(
+                f"cmd.exe /c {original_command}", 
+                shell=True, 
+                capture_output=True, 
+                text=True, 
+                timeout=8, 
+                cwd=sandbox_dir
+            )
         else:
             parts = shlex.split(original_command)
-            result = subprocess.run(parts, shell=False, capture_output=True, text=True, timeout=10, cwd=sandbox_dir)
+            result = subprocess.run(
+                parts, 
+                shell=False, 
+                capture_output=True, 
+                text=True, 
+                timeout=8, 
+                cwd=sandbox_dir
+            )
 
-        output = (result.stdout or result.stderr or "").strip()[:2000]
+        output = (result.stdout or result.stderr or "").strip()[:1500]
+        log_status(f"[TOOL] run_bash executed: {original_command[:80]}... | Output: {len(output)} chars")
         return f"🖥️ {original_command}\n{output or 'No output'}"
 
+    except subprocess.TimeoutExpired:
+        return "❌ Command timed out (8s limit)."
     except Exception as e:
+        log_status(f"[TOOL ERROR] run_bash failed: {e}")
         return f"❌ Execution error: {str(e)[:150]}"
 
 if __name__ == "__main__":

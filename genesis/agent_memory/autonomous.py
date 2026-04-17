@@ -13,6 +13,7 @@ import re
 from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from pathlib import Path
+from .claw_safety import ClawSafety
 
 from ..config import CONFIG, RAG_MODEL, STORAGE_DIR, TOPICS_DIR, TRACE_DIR
 from .core import AgentMemory
@@ -25,6 +26,13 @@ class AutonomousManager:
 
     def __init__(self, agent: AgentMemory):
         self.agent = agent
+        self.repo_root = Path(__file__).parent.parent.parent.resolve()
+        try:
+            self.claw_safety = ClawSafety(self.repo_root)
+            print("[CLAW] SelfImprovementDaemon integrated with safety layer")
+        except Exception as e:
+            print(f"[CLAW INIT WARNING] {e}")
+            self.claw_safety = None
 
     def _create_journal_entry(self, force: bool = False) -> str:
         """Create a useful human-readable journal entry."""
@@ -42,7 +50,7 @@ class AutonomousManager:
 
         hist = "\n".join([f"User: {t.get('prompt','')} → Genesis: {t.get('response','')[:200]}" for t in recent])
         
-        journal_prompt = f"""Create a clear, human-readable journal entry (120-200 words). From your point of view.
+        journal_prompt = f"""Create a clear, human-readable journal entry (120-200 words). From Genesis's point of view.
 Include exact real-world timestamp. Summarize what happened in this session.
 
 Current real-world time: {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
@@ -186,20 +194,33 @@ History:
         self.agent.mark_dirty()
 
     def run_self_improvement_cycle(self) -> str:
-        """Improved cycle: rotates through multiple behaviors."""
+        """Improved cycle with Claw Safety Layer — robust version."""
         print(f"[SELF-IMPROVEMENT] Starting balanced cycle @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
         
         self._run_reflection(force=True)
         self.generate_forward_predictions(force=True)
         self.run_coherence_check()
         
-        # Occasional journal during self-improvement
         if random.random() < 0.4:
             self._create_journal_entry(force=True)
 
+        # === CLAW SAFETY (Robust version) ===
+        try:
+            if hasattr(self, 'claw_safety') and self.claw_safety is not None:
+                suggestion = self._generate_claw_improvement_suggestion()
+                review_result = self.claw_safety.review_and_apply_patch(
+                    patch_content=suggestion,
+                    description=f"Self-improvement cycle"
+                )
+                print(review_result)
+            else:
+                print("[CLAW SAFETY] Layer not ready.")
+        except Exception as e:
+            print(f"[CLAW SAFETY ERROR] {e}")
+
         self.agent.stats["improvement_cycles"] = self.agent.stats.get("improvement_cycles", 0) + 1
         self.agent.mark_dirty()
-        return "✅ Self-improvement cycle completed (reflection + predictions + coherence + occasional journal)."
+        return "✅ Self-improvement cycle completed with Claw safety review."
 
     def _parse_traces_for_atomic_facts(self):
         """Parse recent traces and extract atomic facts for memory indexing."""
@@ -269,6 +290,47 @@ History:
                         self.run_daemons()
                 except Exception:
                     time.sleep(60)
+
+    def __init__(self, agent: AgentMemory):
+        self.agent = agent
+        # Initialize Claw Safety
+        self.repo_root = Path(__file__).parent.parent.parent.resolve()
+        self.claw_safety = ClawSafety(self.repo_root)
+        print("[CLAW] SelfImprovementDaemon integrated with safety layer")
+
+    def _generate_claw_improvement_suggestion(self) -> str:
+        """Generate a REAL LLM-powered self-improvement suggestion."""
+        # Gather recent context for better suggestions
+        recent_reflections = ""
+        if hasattr(self.agent, 'sessions') and self.agent.current_session in self.agent.sessions:
+            recent = self.agent.sessions[self.agent.current_session][-8:]
+            recent_reflections = "\n".join([f"Reflection: {t.get('response','')[:300]}" 
+                                          for t in recent if 'reflection' in str(t.get('topic',''))])
+
+        prompt = f"""You are Genesis's Claw self-improvement engine.
+Based on the current system state and recent reflections, suggest ONE specific, actionable code improvement.
+
+Current stats:
+- Level: {self.agent.level}
+- XP: {self.agent.total_xp}
+- AutoDream runs: {self.agent.state.stats.get('auto_dream_runs', 0)}
+- Memories: ~{len(getattr(self.agent.index, 'index_lines', []))}
+
+Recent reflections:
+{recent_reflections[-800:] if recent_reflections else "None yet"}
+
+Suggest one concrete improvement (code structure, performance, safety, memory management, etc.).
+Output format: Just the patch description + why it helps."""
+
+        try:
+            suggestion = self.agent.call_llm_safe(
+                system="You are a senior software engineer suggesting targeted improvements.",
+                prompt=prompt,
+                model=RAG_MODEL
+            )
+            return suggestion.strip() or "# No specific suggestion generated this cycle."
+        except:
+            return "# Fallback: Improve reflection quality and add more atomic fact patterns."
         
         thread = threading.Thread(target=daemon_loop, daemon=True)
         thread.start()

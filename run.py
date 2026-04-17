@@ -5,10 +5,13 @@ Production Main Entry Point
 """
 
 import argparse
-import sys
 import threading
 import signal
 from pathlib import Path
+import sys
+import os
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
 
 # Robust import setup
 ROOT_DIR = Path(__file__).parent.resolve()
@@ -93,7 +96,7 @@ def main() -> int:
     try:
         webhook_thread = threading.Thread(target=start_webhook_server, daemon=True)
         webhook_thread.start()
-        print("[WEBHOOK] Background server started")
+
     except Exception as e:
         print(f"[WEBHOOK] Failed to start: {e}")
 

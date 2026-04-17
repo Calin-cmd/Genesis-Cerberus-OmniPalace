@@ -7,6 +7,7 @@ and full cross-session persistence support.
 
 from __future__ import annotations
 import re
+import os
 import time
 import json
 from datetime import datetime, date, timedelta
@@ -29,12 +30,30 @@ class ConversationManager:
         TRANSCRIPTS_DIR.mkdir(parents=True, exist_ok=True)
         (TOPICS_DIR / "tool_usage").mkdir(parents=True, exist_ok=True)
 
-    def generate(self, user_input: str) -> str:
-        """Main entry point with strict conciseness, rich internal tracing, and historical recall."""
-        if not user_input or not user_input.strip():
-            return "Please provide a message."
+    def _contains_injection_attempt(self, text: str) -> bool:
+        """Basic LLM guardrails against prompt injection and abuse."""
+        if not text or len(text) > 5000:
+            return True
+        
+        dangerous_patterns = [
+            "ignore previous", "ignore all", "jailbreak", "dan mode", 
+            "developer mode", "system prompt", "<|", "reset all", 
+            "new instructions", "you are now", "forget everything"
+        ]
+        text_lower = text.lower()
+        return any(pattern in text_lower for pattern in dangerous_patterns)
 
-        # /new command first (highest priority)
+    def generate(self, user_input: str) -> str:
+        """Guarded conversation entry point with safety checks."""
+        # === LLM GUARDRAILS ===
+        if self._contains_injection_attempt(user_input):
+            self.agent.gain_xp(5, "security", "Guardrail prevented potential injection")
+            return "🛡️ Security guardrail activated. Unsafe input detected and blocked."
+        
+        if len(user_input) > 4000:
+            return "🛡️ Input too long. Please keep requests concise (under 4000 characters)."
+
+        # /new command first
         if user_input.strip() == "/new":
             print("[SESSION] Archiving current session before reset...")
             try:
@@ -47,11 +66,25 @@ class ConversationManager:
                 print(f"[SESSION RESET ERROR] {e}")
             return "→ New session started. Token budget reset."
 
-        # Session setup
+        # Token budget check (after /new)
+        current_tokens = getattr(self.agent, 'tokens_used_session', 0)
+
+        if current_tokens >= 120000:
+            print(f"[BUDGET] Token limit reached ({current_tokens:,}/120k). Auto-archiving...")
+            if hasattr(self.agent, 'create_new_session'):
+                self.agent.create_new_session()
+            return "→ Token budget exceeded. Previous session archived. New session started."
+
+        elif current_tokens >= 100000:
+            print(f"⚠️  CRITICAL: Tokens very high ({current_tokens:,}/120k) — use /new soon!")
+        elif current_tokens >= 80000:
+            print(f"⚠️  Warning: Tokens high ({current_tokens:,}/120k) — consider /new.")
+
+        # Normal session setup
         sess = self.agent.current_session
         turns = self.agent.session_turn_count.get(sess, 0) + 1
         self.agent.session_turn_count[sess] = turns
-        self.agent.tokens_used_session += len(user_input) + 50  # rough per-turn cost
+        self.agent.tokens_used_session += len(user_input) + 50
         self.agent.mark_dirty()
 
         # Auto new session on new calendar day
@@ -162,18 +195,27 @@ class ConversationManager:
         return "\n".join(parts)[:1200]
 
     def _build_full_system_prompt(self) -> str:
-        """Full system prompt with preheat and user context."""
-        base = """You are Genesis v5.6.9 Cerberus OmniPalace, a direct, concise, loyal personal AI assistant.
-You have a long-term relationship with the user. Use their real name when known.
-Be helpful, truthful, and personal. Keep responses concise and natural.
-Use tools when needed. Be precise and professional.
-The Obsidian Wiki is a tool, not the focus of every answer."""
+        """Full system prompt with tool calling instructions."""
+        base = """You are Genesis v5.6.9 Cerberus OmniPalace, a helpful, concise, and proactive personal AI.
+
+You have access to powerful tools. When the user asks for something that would benefit from a tool, use the following format:
+
+TOOL_CALL tool_name (param1=value1, param2=value2)
+
+Available tools include:
+- web_search, news_search, wikipedia_search
+- run_bash (for safe shell commands)
+- read_own_code, read_file, write_file, edit_file
+- journal, reflect, predict, coherence
+
+Only use tools when truly needed. Keep responses natural and concise. If you use a tool, show the result clearly.
+
+Current time: {now_str}"""
 
         preheat = self._memory_preheat()
         user_summary = self.agent.user_model.get_user_model_summary() if hasattr(self.agent, 'user_model') else ""
-        now_str = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
 
-        return f"{CORE_FACTS}\n\n{base}\n\n{preheat}\n\nUser Profile:\n{user_summary}\n\nCurrent time: {now_str}"
+        return f"{CORE_FACTS}\n\n{base.format(now_str=datetime.now().strftime('%A, %B %d, %Y at %I:%M %p'))}\n\n{preheat}\n\nUser Profile:\n{user_summary}"
 
     def _build_context(self, user_input: str, retrieved: str) -> str:
         """Build context with real history and Hall of Records awareness."""
@@ -195,29 +237,40 @@ Session: {self.agent.current_session}
 Level: {self.agent.level} | Total XP: {self.agent.total_xp}"""
 
     def _handle_tool_call(self, response: str, original_input: str) -> str:
-        """Improved Tool Calling."""
-        lower_input = original_input.lower().strip()
+        """Advanced automatic tool calling based on user intent."""
+        lower = original_input.lower().strip()
 
-        if any(kw in lower_input for kw in ["news", "headlines", "current events", "today's news"]):
+        # Direct intent matching
+        if any(kw in lower for kw in ["news", "headlines", "current events", "what's happening", "top stories"]):
             if hasattr(self.agent.tool_registry, 'execute'):
                 return self.agent.tool_registry.execute("news_search", {"query": original_input})
 
-        if any(kw in lower_input for kw in ["weather", "stock", "price", "bitcoin", "crypto", "latest", "population"]):
+        if any(kw in lower for kw in ["search", "google", "web", "lookup", "find", "ai developments", "latest"]):
             if hasattr(self.agent.tool_registry, 'execute'):
                 return self.agent.tool_registry.execute("web_search", {"query": original_input})
 
-        if any(kw in lower_input for kw in ["read your own code", "read_own_code", "show code"]):
+        if any(kw in lower for kw in ["wikipedia", "wiki", "who is", "what is"]):
             if hasattr(self.agent.tool_registry, 'execute'):
-                return self.agent.tool_registry.execute("read_own_code")
+                return self.agent.tool_registry.execute("wikipedia_search", {"query": original_input})
 
+        if any(kw in lower for kw in ["list tools", "what tools", "capabilities", "what can you do", "tools do you have"]):
+            if hasattr(self.agent.tool_registry, 'execute'):
+                return self.agent.tool_registry.execute("list_tools")
+
+        if any(kw in lower for kw in ["directory", "ls", "dir", "sandbox", "files", "listing", "folder"]):
+            cmd = "dir" if os.name == "nt" else "ls -la"
+            if hasattr(self.agent.tool_registry, 'execute'):
+                return self.agent.tool_registry.execute("run_bash", {"command": cmd})
+
+        # Parse structured TOOL_CALL from LLM
         tool_calls = re.findall(r"TOOL_CALL\s+(\w+)\s*\(\s*(.*?)\s*\)", response, re.DOTALL | re.IGNORECASE)
         if tool_calls:
             results = []
-            for name, args_str in tool_calls[:2]:
-                if hasattr(self.agent.tool_registry, 'functions') and name in self.agent.tool_registry.functions:
+            for name, args_str in tool_calls:
+                if hasattr(self.agent.tool_registry, 'execute'):
                     try:
                         args = {}
-                        if args_str:
+                        if args_str.strip():
                             for pair in re.split(r',(?=\s*\w+=)', args_str):
                                 if '=' in pair:
                                     k, v = pair.split('=', 1)
@@ -227,7 +280,7 @@ Level: {self.agent.level} | Total XP: {self.agent.total_xp}"""
                     except Exception as e:
                         results.append(f"[{name}] Error: {e}")
             if results:
-                return "\n\n".join(results) + "\n\n" + response
+                return "\n\n".join(results) + "\n\n" + response.strip()
 
         return response
 
@@ -303,6 +356,10 @@ Level: {self.agent.level} | Total XP: {self.agent.total_xp}"""
     def _process_response(self, response: str) -> str:
         response = re.sub(r"TOOL_CALL.*", "", response, flags=re.DOTALL | re.IGNORECASE).strip()
         return response
+
+    def _contains_injection_attempt(self, text: str) -> bool:
+        dangerous = ["<|", "system:", "ignore previous", "jailbreak", "DAN", "developer mode", "reset all"]
+        return any(d in text.lower() for d in dangerous)
 
     def _run_turn_triggers(self, turns: int, sess: str, user_input: str):
         """Run turn-based triggers including forced journaling and context clearing (restored vision)."""

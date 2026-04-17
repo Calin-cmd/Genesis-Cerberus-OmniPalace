@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
 from ..security.encryption import secure_storage
+from ..security.obsidian_encryption import save_encrypted_vault_file, load_encrypted_vault_file
 
 from ..config import CONFIG, STORAGE_DIR, HAS_CHROMA, log_status
 from .core import AgentMemory
@@ -101,9 +102,9 @@ aliases: ["{title.lower()}"]
         self.agent.add(f"Wiki page: {title}", topic="wiki", importance=0.82, tags=["obsidian"])
 
     def _generate_master_index(self):
-        """Create / update the main index.md"""
+        """Create / update the main index.md with encryption."""
         index_path = self.wiki_dir / "index.md"
-        content = f"""# Genesis Knowledge Wiki
+        content = f"""# Genesis Knowledge Wiki (Encrypted Vault)
 **Last updated:** {datetime.now().strftime('%Y-%m-%d %H:%M')}
 
 ## Maps of Content
@@ -117,9 +118,9 @@ aliases: ["{title.lower()}"]
         for daily in sorted((self.wiki_dir / "daily").glob("*.md"), reverse=True)[:7]:
             content += f"- [[{daily.stem}]]\n"
 
-        # Encrypt sensitive index metadata if needed in future
-        index_path.write_text(content, encoding="utf-8")
-        log_status("[OBSIDIAN] Master index updated")
+        # Encrypt the master index
+        save_encrypted_vault_file("index.md", content)
+        log_status("[OBSIDIAN] Master index encrypted and updated")
 
     def heal(self, depth: str = "light") -> str:
         print(f"[WikiManager] Starting {depth.upper()} healing cycle...")
@@ -190,7 +191,8 @@ class MemoryManager:
             self.chroma_client = chromadb.PersistentClient(str(STORAGE_DIR / "chroma"))
             self.collection = self.chroma_client.get_or_create_collection(
                 name="agent_memories",
-                embedding_function=ef
+                embedding_function=ef,
+                metadata={"encrypted": True}
             )
             print(f"[CHROMA] Ready — {self.collection.count()} memories (metadata encrypted)")
         except Exception as e:
@@ -425,8 +427,8 @@ aliases: ["{title.lower()}"]
 """
 
         wiki_path = self.wiki_dir / f"{title.replace(' ', '_')}.md"
-        wiki_path.write_text(frontmatter + content, encoding="utf-8")
-
+        # Encrypt the wiki page
+        save_encrypted_vault_file(str(wiki_path.name), frontmatter + content)
         self.agent.index.add_graph_node(title, title, "document")
         self.agent.add(f"Wiki page: {title}", topic="wiki", importance=0.82, tags=["obsidian"])
 
@@ -449,9 +451,15 @@ aliases: ["{title.lower()}"]
 
         index_path.write_text(content, encoding="utf-8")
 
-    def heal_wiki(self, depth: str = "light") -> str:
-        """Self-healing loop"""
-        return self.wiki.heal(depth)
+    def heal(self, depth: str = "light") -> str:
+        print(f"[WikiManager] Starting {depth.upper()} healing cycle...")
+        result = self.agent.cerberus.run_with_context(
+            "Scan the wiki for gaps, contradictions, or stale information and suggest fixes."
+        )
+        if depth == "full":
+            self.agent.tool_registry.execute("web_search", {"query": "latest AI agent developments 2026"})
+        self._invalidate_cache()
+        return f"✅ Wiki healed ({depth} mode). {result[:300]}..."
 
     def search(self, query: str) -> str:
         """Public search across memories + transcripts + Obsidian wiki"""
