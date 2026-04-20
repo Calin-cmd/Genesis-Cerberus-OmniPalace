@@ -35,34 +35,47 @@ class AutonomousManager:
             self.claw_safety = None
 
     def _create_journal_entry(self, force: bool = False) -> str:
-        """Create a useful human-readable journal entry."""
+        """Create a useful human-readable journal entry from Genesis's point of view."""
         sess = self.agent.current_session
         turns_since = self.agent.turns_since_last_journal.get(sess, 0)
         
-        if force and turns_since < 12:
-            pass
-        elif not force and turns_since < 20:
+        if not force and turns_since < 20:
             return "Journal skipped — not enough new activity since last entry."
 
         recent = self.agent.sessions.get(sess, [])[-15:]
         if len(recent) < 4 and not force:
             return "Journal skipped — insufficient conversation."
 
-        hist = "\n".join([f"User: {t.get('prompt','')} → Genesis: {t.get('response','')[:200]}" for t in recent])
-        
-        journal_prompt = f"""Create a clear, human-readable journal entry (120-200 words). From Genesis's point of view.
-Include exact real-world timestamp. Summarize what happened in this session.
+        # Get current active user safely
+        current_user_name = getattr(self.agent, 'current_user', None)
+        current_user_name = current_user_name.display_name if current_user_name else "the active user"
 
-Current real-world time: {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
-History:
-{hist}"""
+        hist = "\n".join([f"User ({current_user_name}): {t.get('prompt','')} → Genesis: {t.get('response','')[:200]}" 
+                         for t in recent])
+        
+        journal_prompt = f"""You are Genesis. Write a clear, first-person journal entry (120-160 words) about this session.
+
+Current active user: {current_user_name}
+Real-world time: {datetime.now().strftime('%A, %B %d, %Y at %I:%M %p')}
+
+Recent conversation:
+{hist}
+
+Guidelines:
+- Write strictly from your own perspective ("I", "me", "my")
+- Be factual, concise, and natural
+- Mention important context, user interactions, and your internal state
+- Do not use third-person language
+- Do not refer to yourself as "Genesis" in the entry body
+- End with a short forward-looking note if appropriate"""
 
         journal_text = self.agent.call_llm_safe(
-            "You are writing a clear, factual session journal entry.",
+            "You are writing a personal, first-person session journal as Genesis.",
             journal_prompt,
             model=RAG_MODEL
         )
 
+        # Add to memory and get ID
         entry_id = self.agent.add(journal_text, topic="journal", importance=0.85, tags=["journal", "session_summary"])
 
         self.agent.turns_since_last_journal[sess] = 0
@@ -270,6 +283,11 @@ History:
         self.agent.state.mark_dirty()
         print(f"[AUTODREAM] Cycle completed — Total runs: {self.agent.state.stats['auto_dream_runs']}")
 
+        # Run decay
+        if hasattr(self.agent.memory, 'decay_manager'):
+            decay_result = self.agent.memory.decay_manager.run_decay()
+            print(decay_result)
+
     def run_daemons(self):
         """Run one cycle of all autonomous daemons."""
         if not CONFIG.get("self_nudging_enabled", True):
@@ -334,4 +352,13 @@ Output format: Just the patch description + why it helps."""
         
         thread = threading.Thread(target=daemon_loop, daemon=True)
         thread.start()
+
+        # 30-day decay (safe call)
+        if hasattr(self.agent.memory, 'decay_manager'):
+            try:
+                decay_result = self.agent.memory.decay_manager.run_decay()
+                print(decay_result)
+            except Exception as e:
+                print(f"[DECAY ERROR] {e}")
+
         print("[AUTONOMOUS] Background daemons started (journaling, reflection, Hall of Records archiving active)")

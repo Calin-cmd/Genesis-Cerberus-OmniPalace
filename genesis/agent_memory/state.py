@@ -25,7 +25,7 @@ class AgentState:
     session_budget: int = CONFIG.get("session_budget", 120000)
     tokens_used_session: int = 0
 
-    # Consolidated Statistics (single definition)
+    # Consolidated Statistics
     stats: Dict = field(default_factory=lambda: {
         "total_memories": 0, "total_sessions": 0, "journals_run": 0,
         "predictions_run": 0, "coherences_run": 0, "decays_run": 0,
@@ -33,8 +33,7 @@ class AgentState:
         "important_feedback": 0, "total_reward": 0.0, "policy_score": 0.5,
         "contradictions_detected": 0, "facts_merged": 0, "facts_archived": 0,
         "auto_dream_runs": 0, "proactive_runs": 0, "inspiration_bursts": 0,
-        "wiki_compiles": 0, "wiki_heals": 0,
-        "palace_growth_events": 0
+        "wiki_compiles": 0, "wiki_heals": 0, "palace_growth_events": 0
     })
 
     # XP & Personality
@@ -61,6 +60,13 @@ class AgentState:
                 self._user_name = cleaned
                 self.mark_dirty()
 
+    # ====================== MULTI-USER SUPPORT ======================
+    current_user_id: str = "default"
+    user_profiles: Dict[str, Dict] = field(default_factory=dict)
+
+    # Social Graph (Phase 3.2)
+    social_graph: Dict[str, Dict] = field(default_factory=dict)
+
     # Session tracking
     session_turn_count: Dict[str, int] = field(default_factory=dict)
     turns_since_last_journal: Dict[str, int] = field(default_factory=dict)
@@ -81,6 +87,9 @@ class AgentState:
     def mark_dirty(self):
         self._dirty = True
 
+    def get_current_user_id(self) -> str:
+        return self.current_user_id
+
     def save_if_changed(self) -> bool:
         if not self._dirty:
             return False
@@ -89,12 +98,12 @@ class AgentState:
                 "current_session": self.current_session,
                 "session_budget": self.session_budget,
                 "tokens_used_session": self.tokens_used_session,
-                "stats": dict(self.stats),          # ensure full dict
+                "stats": dict(self.stats),
                 "sessions": self.sessions,
                 "user_name": self.user_name,
                 "session_turn_count": self.session_turn_count,
                 "turns_since_last_journal": self.turns_since_last_journal,
-                "last_date": self.last_date.isoformat(),
+                "last_date": self.last_date.isoformat() if hasattr(self.last_date, 'isoformat') else str(self.last_date),
                 "last_rag_turn": self.last_rag_turn,
                 "total_xp": self.total_xp,
                 "level": self.level,
@@ -105,6 +114,9 @@ class AgentState:
                 "wiki_contributions": self.wiki_contributions,
                 "active_sub_agents": self.active_sub_agents,
                 "persistent_sub_agents": self.persistent_sub_agents,
+                "current_user_id": self.current_user_id,
+                "user_profiles": self.user_profiles,
+                "social_graph": self.social_graph,
             }
 
             from ..security.encryption import secure_storage
@@ -146,6 +158,9 @@ class AgentState:
             instance.active_sub_agents = data.get("active_sub_agents", [])
             instance.persistent_sub_agents = data.get("persistent_sub_agents", {})
             instance._dirty = False
+            instance.current_user_id = data.get("current_user_id", "default")
+            instance.user_profiles = data.get("user_profiles", {})
+            instance.social_graph = data.get("social_graph", {})
             print("[ENCRYPTION] Memory loaded successfully (encrypted)")
             return instance
         except Exception as e:

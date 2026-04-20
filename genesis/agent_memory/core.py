@@ -15,6 +15,9 @@ from collections import defaultdict
 from ..config import CONFIG, log_status, CORE_FACTS, RAG_MODEL, STORAGE_DIR
 from ..dependencies import HAS_CHROMA
 from .state import AgentState
+from .user_profiles import UserProfileManager
+from .social_graph import SocialGraph
+from .access_control import AccessControl
 
 if TYPE_CHECKING:
     from .memory import MemoryManager
@@ -85,6 +88,9 @@ class AgentMemory:
         self.tool_registry = ToolRegistry(self)
         self.commands = CommandRouter(self)
         self.user_model = UserModelManager(self)
+        self.user_profiles = UserProfileManager(self)
+        self.access_control = AccessControl(self)
+        self.social_graph = SocialGraph(self)
         self.llm = LLMManager(self)
         self.xp = XPManager(self)
         # Claw is now handled inside AutonomousManager (via self.claw_safety)
@@ -249,6 +255,35 @@ class AgentMemory:
         self.state.last_date = value
         self.state.mark_dirty()
 
+    @property
+    def current_user_id(self):
+        return self.state.current_user_id
+
+    @current_user_id.setter
+    def current_user_id(self, value):
+        self.state.current_user_id = value
+        self.state.mark_dirty()
+
+    @property
+    def current_user(self):
+        return self.user_profiles.get_current_profile() if hasattr(self, 'user_profiles') else None
+
+    @property
+    def social_graph(self):
+        return self._social_graph if hasattr(self, '_social_graph') else None
+    @social_graph.setter
+    def social_graph(self, value):
+        self._social_graph = value
+        self.mark_dirty()
+
+    @property
+    def access_control(self):
+        return getattr(self, '_access_control', None)
+    @access_control.setter
+    def access_control(self, value):
+        self._access_control = value
+        self.mark_dirty()
+
     # ====================== STATE METHODS ======================
     def mark_dirty(self): self.state.mark_dirty()
     def save_if_changed(self): return self.state.save_if_changed()
@@ -261,14 +296,14 @@ class AgentMemory:
 
     # ====================== SESSION LIFECYCLE ======================
     def create_new_session(self):
-        """Force full reset of token budget and session counters."""
+        """Force full reset of token budget and session counters with proper save."""
         # Save current state first
         self.save()
 
         # New session
         self.current_session = f"default_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-        # HARD RESET
+        # HARD RESET - direct state mutation
         self.tokens_used_session = 0
         self.session_turn_count = {self.current_session: 0}
         self.turns_since_last_journal = {self.current_session: 0}
@@ -277,8 +312,11 @@ class AgentMemory:
         self.state.tokens_used_session = 0
         self.state.session_turn_count = {self.current_session: 0}
         self.state.turns_since_last_journal = {self.current_session: 0}
+        self.state.current_session = self.current_session
 
         self.mark_dirty()
+        self.save()  # Force immediate encrypted save
+
         print(f"[SESSION] ✅ HARD RESET — New session: {self.current_session} | Tokens = 0")
         return True
 
@@ -310,6 +348,69 @@ class AgentMemory:
             return
         # (full logic can stay here or move to lifecycle.py later)
         pass  # placeholder - original logic can be added back if needed
+
+    # ====================== MULTI USER PROFILES ======================
+    def switch_user(self, user_id: str) -> str:
+        """Switch active user with full context update."""
+        if hasattr(self, 'user_profiles'):
+            result = self.user_profiles.switch_user(user_id)
+            # Force refresh current user context
+            if hasattr(self, 'current_user'):
+                profile = self.user_profiles.get_current_profile()
+                print(f"👤 Switched to user: {profile.display_name} (ID: {user_id})")
+            return result
+        return "User profile system not initialized."
+
+    def add_user(self, user_id: str, display_name: str, relationship: str = "friend", trust: float = 0.7):
+        """Add a new user to the system."""
+        if hasattr(self, 'user_profiles'):
+            return self.user_profiles.add_user(user_id, display_name, relationship, trust)
+        return "User profile system not initialized."
+
+    def list_users(self) -> str:
+        """List all registered users."""
+        if hasattr(self, 'user_profiles'):
+            return self.user_profiles.list_users()
+        return "User profile system not initialized."
+
+    def add_person(self, user_id: str, display_name: str, relationship_type: str = "friend", trust: float = 0.6):
+        """Add a person to the social graph."""
+        if hasattr(self, 'social_graph'):
+            return self.social_graph.add_person(user_id, display_name, relationship_type, trust)
+        return "Social graph not initialized."
+
+    def record_interaction(self, user_id: str, note: str = ""):
+        """Record an interaction with a person."""
+        if hasattr(self, 'social_graph'):
+            self.social_graph.record_interaction(user_id, note)
+
+        # ====================== ACCESS CONTROL ======================
+        elif cmd == "/onboard":
+            # Usage: /onboard <display_name> <password>
+            parts = user_input.split(maxsplit=2)
+            if len(parts) == 3:
+                response = self.agent.access_control.onboard_primary(parts[1], parts[2])
+            else:
+                response = "Usage: /onboard <display_name> <password>"
+
+        elif cmd.startswith("/set_timeout "):
+            try:
+                minutes = int(user_input.split()[1])
+                response = self.agent.access_control.set_timeout(minutes)
+            except:
+                response = "Usage: /set_timeout <minutes>"
+
+        elif cmd.startswith("/grant "):
+            parts = user_input.split(maxsplit=3)
+            if len(parts) >= 3:
+                target = parts[1]
+                cmd_type = parts[2]
+                response = self.agent.access_control.grant_access("default", target, cmd_type)
+            else:
+                response = "Usage: /grant <user_id> <all|command>"
+
+        elif cmd == "/whoami":
+            response = f"Current authenticated user: {self.agent.access_control.get_current_user_display()}"
 
     # ====================== REMAINING LEGACY METHODS ======================
     def _evolve_personality(self, source: str, amount: float = 0.025):
@@ -399,7 +500,7 @@ class AgentMemory:
             "active_sub_agents": len(self.active_sub_agents),
             "tools_registered": len(self.tool_registry.list_tools()) if self.tool_registry else 0,
             "auto_dream_runs": self.state.stats.get("auto_dream_runs", 0),
-            "user_name": self.user_name or 'Unknown',
+            "user_name": self.current_user.display_name if hasattr(self, 'current_user') and self.current_user else (self.user_name or 'Unknown'),
             "current_session": self.current_session,
             "turns": self.session_turn_count.get(self.current_session, 0)
         }

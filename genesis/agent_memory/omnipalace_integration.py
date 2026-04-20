@@ -95,13 +95,19 @@ class OmniPalaceManager:
                 "coherence": 0.96,
                 "x": 0, "y": 0, "z": 12
             },
-            # === RESTORED ORIGINAL VISION: World Observatory for tool/world knowledge ===
             "World Observatory": {
                 "theme": "🌍 External Knowledge & Tools",
                 "description": "All world knowledge learned via web search, news, tools, and real-time events. Dynamically expands.",
                 "color": "teal",
                 "coherence": 0.91,
                 "x": 15, "y": 8, "z": 4
+            },
+            "Registry Wing": {
+                "theme": "🪪 User Profiles & Social Graph",
+                "description": "Persistent user profiles, trust levels, relationships, and social metrics",
+                "color": "violet",
+                "coherence": 0.88,
+                "x": -12, "y": 2, "z": 6
             }
         }
 
@@ -223,6 +229,41 @@ class OmniPalaceManager:
                 mem["room"] = target_room
                 return f"Memory moved to {target_room}"
         return "Memory not found."
+
+    def add_to_room(self, room_name: str, content: str, tags: List[str] = None):
+        """Add memory to a specific OmniPalace room for method of loci recall."""
+        tags = tags or []
+        
+        if room_name not in self.rooms:
+            # Auto-create room if it doesn't exist yet
+            self.rooms[room_name] = {
+                "theme": f"🌐 {room_name}",
+                "description": f"Auto-generated room for {room_name}",
+                "color": "white",
+                "coherence": 0.8,
+                "x": random.randint(-15, 15),
+                "y": random.randint(-15, 15),
+                "z": random.randint(-8, 12)
+            }
+        
+        entry = {
+            "content": content[:800],
+            "timestamp": datetime.now().isoformat(),
+            "tags": tags,
+            "id": f"room_{len(self.rooms[room_name])}"
+        }
+        
+        if "entries" not in self.rooms[room_name]:
+            self.rooms[room_name]["entries"] = []
+        
+        self.rooms[room_name]["entries"].append(entry)
+        
+        # Also add to main memory system
+        if hasattr(self.agent, 'add'):
+            self.agent.add(content, topic=room_name.lower().replace(" ", "_"), importance=0.7, tags=tags)
+        
+        log_status(f"[OMNIPALACE] Added to room '{room_name}' ({len(content)} chars)")
+        return True
 
     def merge_rooms(self, room1: str, room2: str) -> str:
         """Merge two rooms (future roadmap feature)."""

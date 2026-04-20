@@ -43,7 +43,7 @@ if old_data:
     agent.state.tokens_used_session = old_data.get("tokens_used_session", 0)
     agent.state.stats.update(old_data.get("stats", {}))
     agent.state.sessions = old_data.get("sessions", {})
-    agent.state.user_name = old_data.get("user_name", "calin")
+    agent.state.user_name = old_data.get("user_name")
     agent.state.session_turn_count = old_data.get("session_turn_count", {})
     agent.state.turns_since_last_journal = old_data.get("turns_since_last_journal", {})
     agent.state.total_xp = old_data.get("total_xp", 0)

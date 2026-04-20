@@ -44,7 +44,7 @@ class ConversationManager:
         return any(pattern in text_lower for pattern in dangerous_patterns)
 
     def generate(self, user_input: str) -> str:
-        """Guarded conversation entry point with safety checks."""
+        """Guarded conversation entry point with strong user context."""
         # === LLM GUARDRAILS ===
         if self._contains_injection_attempt(user_input):
             self.agent.gain_xp(5, "security", "Guardrail prevented potential injection")
@@ -53,7 +53,14 @@ class ConversationManager:
         if len(user_input) > 4000:
             return "🛡️ Input too long. Please keep requests concise (under 4000 characters)."
 
-        # /new command first
+        # === STRONG CONTEXT-AWARE GREETING ===
+        greeting = "Hello! 👋 "
+        if hasattr(self.agent, 'user_profiles') and hasattr(self.agent.user_profiles, 'get_greeting'):
+            greeting = self.agent.user_profiles.get_greeting()
+        else:
+            greeting = "Hello! 👋 "
+
+        # /new command first - force journal then reset
         if user_input.strip() == "/new":
             print("[SESSION] Archiving current session before reset...")
             try:
@@ -62,25 +69,24 @@ class ConversationManager:
                 if hasattr(self.agent, 'create_new_session'):
                     self.agent.create_new_session()
                 print("→ New session started. Token budget reset.")
+                return "→ New session started. Token budget reset."
             except Exception as e:
                 print(f"[SESSION RESET ERROR] {e}")
-            return "→ New session started. Token budget reset."
+                return "→ New session started with minor error."
 
-        # Token budget check (after /new)
+        # Token budget check
         current_tokens = getattr(self.agent, 'tokens_used_session', 0)
-
         if current_tokens >= 120000:
             print(f"[BUDGET] Token limit reached ({current_tokens:,}/120k). Auto-archiving...")
             if hasattr(self.agent, 'create_new_session'):
                 self.agent.create_new_session()
             return "→ Token budget exceeded. Previous session archived. New session started."
-
         elif current_tokens >= 100000:
             print(f"⚠️  CRITICAL: Tokens very high ({current_tokens:,}/120k) — use /new soon!")
         elif current_tokens >= 80000:
             print(f"⚠️  Warning: Tokens high ({current_tokens:,}/120k) — consider /new.")
 
-        # Normal session setup
+        # Normal session setup - define sess here for logging
         sess = self.agent.current_session
         turns = self.agent.session_turn_count.get(sess, 0) + 1
         self.agent.session_turn_count[sess] = turns
@@ -97,7 +103,7 @@ class ConversationManager:
         if hasattr(self.agent, 'claw') and hasattr(self.agent.claw, 'record_user_activity'):
             self.agent.claw.record_user_activity()
 
-        # Easter Egg: Strong yesterday / previous session recall
+        # Easter Egg
         lower = user_input.lower().strip()
         if any(phrase in lower for phrase in ["yesterday", "previous session", "what happened", "last session", "day before", "earlier session"]):
             dump_trace("llm_thought", {"stage": "easter_egg", "trigger": "historical_recall"})
@@ -105,19 +111,30 @@ class ConversationManager:
                 self.agent.omnipalace.current_room = "Hall of Records"
             print("[EASTER EGG] Hall of Records recall activated.")
 
-        # Strong self-improvement detection
+        # Self-improvement detection
         lower_input = user_input.lower()
         if any(kw in lower_input for kw in ["read your own code", "read_own_code", "improve yourself", "edit your code", "upgrade yourself", "self improvement"]):
             return self._handle_self_improvement(user_input)
 
-        # Command handling for /good, /wrong, /important, etc.
+        # Command handling
         if hasattr(self.agent, 'commands') and self.agent.commands:
             cmd_response = self.agent.commands.handle(user_input)
             if cmd_response is not None:
                 self._log_to_session(sess, user_input, cmd_response)
+                if not user_input.strip().startswith('/'):
+                    return greeting + cmd_response
                 return cmd_response
 
-        # === DIRECT TOOL CALL DETECTION (before sending to LLM) ===
+        # === SOCIAL CLAW: Auto-record interaction with current user ===
+        if hasattr(self.agent, 'social_graph') and hasattr(self.agent.social_graph, 'record_interaction'):
+            current_user_id = getattr(self.agent.state, 'current_user_id', 'default')
+            self.agent.social_graph.record_interaction(
+                user_id=current_user_id,
+                note=f"Conversation turn: {user_input[:100]}...",
+                context=user_input
+            )
+
+        # === DIRECT TOOL CALL DETECTION ===
         lower_input = user_input.strip().lower()
         if lower_input.startswith(("run_bash ", "/run_bash ", "/bash ")):
             cmd_str = user_input.split(maxsplit=1)[1] if len(user_input.split()) > 1 else ""
@@ -126,7 +143,7 @@ class ConversationManager:
                 self._log_to_session(sess, user_input, tool_result)
                 return f"[Tool Result]\n{tool_result}"
 
-        # === EVERY EVENT JOURNAL + USER LEARNING (original vision) ===
+        # === EVERY EVENT JOURNAL + USER LEARNING ===
         if CONFIG.get("auto_journal_every_event", True):
             try:
                 insights = f"User said: {user_input}"
@@ -146,13 +163,6 @@ class ConversationManager:
         retrieved = self._get_relevant_memories(user_input, turns)
         context = self._build_context(user_input, retrieved)
 
-        dump_trace("llm_thought", {
-            "stage": "context_built",
-            "preheat_length": len(self._memory_preheat()),
-            "retrieved_count": len(retrieved.splitlines()) if retrieved else 0,
-            "cerberus_decision": self._should_use_cerberus(user_input)
-        })
-
         use_cerberus = self._should_use_cerberus(user_input)
         if use_cerberus and hasattr(self.agent, 'cerberus') and self.agent.cerberus:
             final_response = self.agent.cerberus.run_with_context(context)
@@ -163,11 +173,9 @@ class ConversationManager:
         final_response = self._process_response(final_response)
         self._log_to_session(sess, user_input, final_response)
 
-        dump_trace("llm_thought", {
-            "stage": "response_complete",
-            "response_length": len(final_response),
-            "final_response_preview": final_response[:150]
-        })
+        # Prepend greeting for natural messages
+        if not user_input.strip().startswith('/'):
+            final_response = greeting + final_response
 
         self._run_turn_triggers(turns, sess, user_input)
 
@@ -245,7 +253,7 @@ Level: {self.agent.level} | Total XP: {self.agent.total_xp}"""
             if hasattr(self.agent.tool_registry, 'execute'):
                 return self.agent.tool_registry.execute("news_search", {"query": original_input})
 
-        if any(kw in lower for kw in ["search", "google", "web", "lookup", "find", "ai developments", "latest"]):
+        if any(kw in lower for kw in ["search the web", "web search", "google", "lookup online", "find on the internet"]):
             if hasattr(self.agent.tool_registry, 'execute'):
                 return self.agent.tool_registry.execute("web_search", {"query": original_input})
 

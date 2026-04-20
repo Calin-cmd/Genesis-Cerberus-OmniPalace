@@ -149,9 +149,81 @@ class MemoryManager:
         self.collection = None
         self._recent_rag_cache: Dict = {}
 
+        # Wiki Manager
+        self.wiki = WikiManager(agent)
+
+        # Memory Router
+        self.router = MemoryRouter(agent)
+        self.router.set_memory_manager(self)
+
+        # Decay Manager (30-day archival)
+        self.decay_manager = DecayManager(agent)
+        self.decay_manager.set_memory_manager(self)
+
+        # Registry Wing for users + social graph
+        self.registry_wing = RegistryWing(agent)
+
+        # ====================== STRICT MEMORY FOLDER STRUCTURE ======================
+        self.storage_base = STORAGE_DIR
+
+        self.FOLDER_MAP = {
+            "hall_of_records": self.storage_base / "archived" / "hall_of_records",
+            "journal_archive": self.storage_base / "archived" / "Journal_Archive",
+            "memory_library": self.storage_base / "Memory_Library",
+            "skill_forge": self.storage_base / "Skill_Forge",
+            "skills": self.storage_base / "skills",
+            "prediction_tower": self.storage_base / "Prediction_Tower",
+            "registry_wing": self.storage_base / "Registry_Wing",      # New for users & social graph
+            "reflection_grove": self.storage_base / "Reflection_Grove",
+            "cerberus_chamber": self.storage_base / "Cerberus_Chamber",
+            "wiki_atrium": self.storage_base / "obsidian_vault",
+            "world_observatory": self.storage_base / "World_Observatory",
+            "sandbox": self.storage_base / "sandbox",                  # TEMP ONLY
+            "outbound": self.storage_base / "outbound",
+            "transcripts": self.storage_base / "transcripts",
+            "registry_wing": self.storage_base / "Registry_Wing",
+        }
+
+        # Create all folders
+        for folder in self.FOLDER_MAP.values():
+            folder.mkdir(parents=True, exist_ok=True)
+
+        # Explicitly ensure Registry Wing exists
+        self.FOLDER_MAP["registry_wing"].mkdir(parents=True, exist_ok=True)
+
         # Transcript directory
-        self.transcript_dir = STORAGE_DIR / "transcripts"
-        self.transcript_dir.mkdir(parents=True, exist_ok=True)
+        self.transcript_dir = self.FOLDER_MAP["transcripts"]
+
+        # ====================== Obsidian Vault ======================
+        self.vault_dir = self.FOLDER_MAP["wiki_atrium"]
+        self.raw_dir = self.vault_dir / "raw"
+        self.wiki_dir = self.vault_dir / "wiki"
+        self.indexes_dir = self.vault_dir / "indexes"
+        self.attachments_dir = self.vault_dir / "attachments"
+        
+        for d in [self.vault_dir, self.raw_dir, self.wiki_dir, self.indexes_dir, self.attachments_dir]:
+            d.mkdir(parents=True, exist_ok=True)
+
+        # Create standard Obsidian subfolders
+        (self.wiki_dir / "concepts").mkdir(exist_ok=True)
+        (self.wiki_dir / "people").mkdir(exist_ok=True)
+        (self.wiki_dir / "papers").mkdir(exist_ok=True)
+        (self.wiki_dir / "projects").mkdir(exist_ok=True)
+        (self.wiki_dir / "daily").mkdir(exist_ok=True)
+
+
+    def get_memory_path(self, category: str) -> Path:
+        """Strict routing - sandbox is NEVER used for memory"""
+        if category == "sandbox":
+            raise ValueError("sandbox/ is for temporary tool execution ONLY — not memory storage")
+        return self.FOLDER_MAP.get(category, self.FOLDER_MAP["hall_of_records"])
+
+    def mark_dirty(self, silent: bool = False):
+        """Safe mark_dirty with optional silent mode to reduce logging recursion"""
+        if hasattr(self.agent, 'mark_dirty'):
+            self.agent.mark_dirty()
+        if not silent:
+            log_status("[MEMORY] Marked dirty for save")
 
         # ====================== Obsidian Vault ======================
         self.vault_dir = STORAGE_DIR / "obsidian_vault"
@@ -169,9 +241,6 @@ class MemoryManager:
         (self.wiki_dir / "papers").mkdir(exist_ok=True)
         (self.wiki_dir / "projects").mkdir(exist_ok=True)
         (self.wiki_dir / "daily").mkdir(exist_ok=True)
-
-        # Wiki Manager
-        self.wiki = WikiManager(agent)
 
     def _init_chroma(self):
         """Initialize ChromaDB with encrypted metadata support."""
@@ -276,11 +345,12 @@ class MemoryManager:
         return traditional[:n_results]
 
     def add(self, content: str, topic: str = "general", importance: float = 0.6, tags: List[str] = None):
-        """Add memory with novelty filtering — QUIET VERSION (no console spam)"""
+        """Safe single-pass add"""
         if not content or not content.strip():
             return None
-
         tags = tags or []
+        # Call router directly - do NOT let it call back
+        return self.router.route(content, category=topic, importance=importance, tags=tags)
 
         # Novelty check via OmniPalace
         novelty = self.agent.omnipalace.compute_novelty(content)
@@ -550,3 +620,150 @@ aliases: ["{title.lower()}"]
 
     def get_wiki_status(self) -> dict:
         return self.wiki.get_status()
+
+class MemoryRouter:
+    """Final locked-down router - prevents recursion and duplicate writes."""
+
+    def __init__(self, agent: "AgentMemory"):
+        self.agent = agent
+        self.mm = None
+        self._routing_in_progress = False  # Guard against loops
+
+    def set_memory_manager(self, mm):
+        self.mm = mm
+
+    def route(self, content: str, category: str = "general", importance: float = 0.6, tags: List[str] = None):
+        """Single-pass routing with loop protection"""
+        if self._routing_in_progress or not content or not content.strip():
+            return None
+
+        self._routing_in_progress = True
+        tags = tags or []
+
+        try:
+            mapping = {
+                "journal": ("journal_archive", "Journal Archive"),
+                "reflection": ("reflection_grove", "Reflection Grove"),
+                "prediction": ("prediction_tower", "Prediction Tower"),
+                "skill": ("skill_forge", "Skill Forge"),
+                "user_profile": ("registry_wing", "Registry Wing"),
+                "social": ("registry_wing", "Registry Wing"),
+                "world": ("world_observatory", "World Observatory"),
+                "wiki": ("wiki_atrium", "Wiki Atrium"),
+                "memory": ("memory_library", "Memory Library"),
+                "general": ("memory_library", "Memory Library"),
+            }
+
+            folder_key, room_name = mapping.get(category.lower(), ("memory_library", "Memory Library"))
+
+            # Direct file write only
+            target_path = self.mm.get_memory_path(folder_key)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"{category}_{timestamp}.md"
+            file_path = target_path / filename
+
+            header = f"""---
+title: {category.title()} Entry - {timestamp}
+created: {datetime.now().isoformat()}
+room: {room_name}
+importance: {importance}
+tags: {tags}
+---
+
+"""
+            file_path.write_text(header + content.strip(), encoding="utf-8")
+            print(f"[ROUTER] ✅ Wrote to {folder_key}/{filename}")
+
+            # Safe OmniPalace call
+            if hasattr(self.agent, 'omnipalace') and hasattr(self.agent.omnipalace, 'add_to_room'):
+                try:
+                    self.agent.omnipalace.add_to_room(room_name, content[:500], tags=tags)
+                except:
+                    pass
+
+            # Direct index add only (no agent.add)
+            if hasattr(self.agent, 'index') and hasattr(self.agent.index, 'add_entry'):
+                try:
+                    self.agent.index.add_entry(content.strip(), category, importance, tags)
+                except:
+                    pass
+
+        finally:
+            self._routing_in_progress = False
+
+        return f"✅ Routed to {folder_key} → {room_name}"
+
+class DecayManager:
+    """30-day decay: moves old journals/memories to long-term Hall of Records."""
+
+    def __init__(self, agent: "AgentMemory"):
+        self.agent = agent
+        self.mm = None
+        self.decay_days = 30   # <-- This was missing
+
+    def set_memory_manager(self, mm):
+        self.mm = mm
+
+    def run_decay(self):
+        """Run decay cycle - move old items to hall_of_records"""
+        if self.mm is None:
+            return "⚠️ Decay skipped — memory manager not ready."
+
+        cutoff = datetime.now() - timedelta(days=self.decay_days)
+        moved = 0
+
+        # Decay from Journal_Archive
+        journal_archive = self.mm.get_memory_path("journal_archive")
+        for file in journal_archive.glob("*.md"):
+            try:
+                if file.stat().st_mtime < cutoff.timestamp():
+                    target = self.mm.get_memory_path("hall_of_records") / file.name
+                    file.rename(target)
+                    moved += 1
+            except:
+                pass
+
+        # Decay from Memory_Library
+        memory_library = self.mm.get_memory_path("memory_library")
+        for file in memory_library.glob("*.md"):
+            try:
+                if file.stat().st_mtime < cutoff.timestamp():
+                    target = self.mm.get_memory_path("hall_of_records") / f"decayed_{file.name}"
+                    file.rename(target)
+                    moved += 1
+            except:
+                pass
+
+        if moved > 0:
+            log_status(f"[DECAY] Moved {moved} items to Hall of Records")
+            self.agent.mark_dirty()
+
+        return f"✅ Decay cycle complete — {moved} items archived."
+
+class RegistryWing:
+    """Persistent user profiles and social graph storage."""
+
+    def __init__(self, agent: "AgentMemory"):
+        self.agent = agent
+        self.mm = agent.memory
+        self.profiles = {}
+
+    def add_or_update_profile(self, user_id: str, display_name: str, relationship: str = "friend", trust: float = 0.7):
+        self.profiles[user_id] = {
+            "display_name": display_name,
+            "relationship": relationship,
+            "trust": trust,
+            "last_interaction": datetime.now().isoformat(),
+            "interaction_count": self.profiles.get(user_id, {}).get("interaction_count", 0) + 1
+        }
+        # Save to Registry Wing folder
+        path = self.mm.get_memory_path("registry_wing") / f"profile_{user_id}.json"
+        path.write_text(json.dumps(self.profiles[user_id], indent=2), encoding="utf-8")
+        self.agent.mark_dirty()
+        return f"✅ Profile updated: {display_name} ({relationship}, trust: {trust})"
+
+    def get_profile(self, user_id: str):
+        return self.profiles.get(user_id)
+
+    def list_profiles(self):
+        return self.profiles

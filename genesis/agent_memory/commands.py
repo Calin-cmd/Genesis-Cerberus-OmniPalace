@@ -48,6 +48,69 @@ class CommandRouter:
             self.agent.reset_session(hard_reset=False)
             response = f"✅ New session started: {self.agent.current_session} (token budget reset)"
 
+        elif cmd in ("/new", "/reset"):
+            self.agent.reset_session(hard_reset=False)
+            response = f"✅ New session started: {self.agent.current_session} (token budget reset)"
+
+        # ====================== MULTI-USER COMMANDS (Phase 3.1) ======================
+        elif cmd == "/users" or cmd == "/listusers":
+            response = self.agent.list_users() if hasattr(self.agent, 'list_users') else "User system initializing..."
+
+        elif cmd.startswith("/switch user ") or cmd.startswith("/switch "):
+            user_id = user_input.split(maxsplit=2)[-1].strip()
+            response = self.agent.switch_user(user_id) if hasattr(self.agent, 'switch_user') else "User switching unavailable."
+
+        elif cmd.startswith("/adduser "):
+            parts = user_input.split(maxsplit=3)
+            if len(parts) >= 3:
+                user_id = parts[1]
+                display_name = parts[2]
+                relationship = parts[3] if len(parts) > 3 else "friend"
+                response = self.agent.add_user(user_id, display_name, relationship)
+            else:
+                response = "Usage: /adduser <user_id> <display_name> [relationship]"
+
+        # ====================== ACCESS CONTROL ======================
+        elif cmd.startswith("/onboard "):
+            parts = user_input.split(maxsplit=2)
+            if len(parts) == 3:
+                response = self.agent.access_control.onboard_primary(parts[1], parts[2])
+            else:
+                response = "Usage: /onboard <display_name> <password>"
+
+        elif cmd.startswith("/set_timeout "):
+            try:
+                minutes = int(user_input.split()[1])
+                response = self.agent.access_control.set_timeout(minutes)
+            except:
+                response = "Usage: /set_timeout <minutes>"
+
+        elif cmd.startswith("/grant "):
+            parts = user_input.split(maxsplit=2)
+            if len(parts) >= 2:
+                target = parts[1]
+                cmd_type = parts[2] if len(parts) > 2 else "all"
+                response = self.agent.access_control.grant_access("default", target, cmd_type)
+            else:
+                response = "Usage: /grant <user_id> [all|command]"
+
+        elif cmd == "/whoami":
+            response = f"Current authenticated user: {self.agent.access_control.get_current_user_display()}"
+
+        # ====================== SOCIAL GRAPH (Phase 3.2) ======================
+        elif cmd.startswith("/addperson ") or cmd.startswith("/add_person "):
+            parts = user_input.split(maxsplit=3)
+            if len(parts) >= 3:
+                user_id = parts[1]
+                display_name = parts[2]
+                rel_type = parts[3] if len(parts) > 3 else "friend"
+                response = self.agent.add_person(user_id, display_name, rel_type)
+            else:
+                response = "Usage: /addperson <id> <display_name> [relationship]"
+
+        elif cmd == "/social" or cmd == "/relationships":
+            response = self.agent.social_graph.list_social_circle() if hasattr(self.agent, 'social_graph') else "Social graph not initialized."
+
         # ====================== MEMORY & SEARCH ======================
         elif cmd.startswith("/search"):
             query = user_input[7:].strip()

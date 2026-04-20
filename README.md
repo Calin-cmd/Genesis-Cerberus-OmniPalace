@@ -1,18 +1,22 @@
-# Genesis v5.6.9 Cerberus OmniPalace
+# Genesis v5.7 Cerberus OmniPalace
 
 **A modular, persistent, self-improving personal AI companion with hybrid memory, spatial memory palace, living Obsidian vault, and safe autonomous code evolution.**
 
 ---
 
-## Current Status (April 15, 2026)
+## 🎉 Phase 2 Complete - Security Hardening (v5.7.0)
 
-**Stable after Phase 1 refactoring:**
-- Successfully split the original `AgentMemory` god class
-- Pure state + persistence now lives in `state.py`
-- Core is now a thin orchestrator
-- Windows sandbox + hardened `run_bash` tool working
-- All daemons running, Obsidian wiki active, journals flowing to Hall of Records
+**Date:** April 16, 2026
 
+**Achievements:**
+- Full at-rest encryption for all long-term memory (JSON, Obsidian, Chroma)
+- Claw Self-Improvement Safety System (review-only mode with user approval)
+- Robust LLM Guardrails against injection and abuse
+- Stable session management and token budgeting
+- Live-updating dashboard and OmniPalace visualization
+- Hardened tool sandboxing
+
+Genesis is now significantly more secure and production-ready.
 ---
 
 ## Core Features

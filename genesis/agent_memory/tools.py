@@ -303,7 +303,12 @@ def _safe_read_file(filepath: str) -> str:
 
 
 def _safe_write_file(filepath: str, content: str) -> str:
+    """Strict write with category protection"""
     try:
+        # Block any attempt to write memory data into sandbox
+        if "sandbox" in filepath.lower() and any(word in filepath.lower() for word in ["memory", "journal", "session", "wiki"]):
+            return "❌ Error: Cannot write memory/journal data to sandbox/. Use correct category path (e.g. journal_archive, memory_library)."
+
         safe_path = _resolve_safe_path(filepath)
         safe_path.parent.mkdir(parents=True, exist_ok=True)
         safe_path.write_text(content, encoding="utf-8")
@@ -311,7 +316,6 @@ def _safe_write_file(filepath: str, content: str) -> str:
         return f"✅ Wrote {len(content)} characters to {filepath}"
     except Exception as e:
         return f"Write failed: {e}"
-
 
 def _safe_edit_file_with_confirmation(filepath: str, diff: str) -> str:
     try:

@@ -219,6 +219,9 @@ FULL_HELP_TEXT = textwrap.dedent("""\
     /wrong [id]              - Negative feedback
     /important [id]          - Strong positive feedback
     /reset                   - Same as /new
+    /users                   - List all registered users
+    /switch user <id>        - Switch active user
+    /adduser <id> <name> [relationship]   - Add a new user
 
     Memory & Self-Improvement
     /corefacts               - View/edit core facts
