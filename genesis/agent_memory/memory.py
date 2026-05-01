@@ -10,14 +10,16 @@ import time
 import hashlib
 import re
 import json
+import threading
 from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime, timedelta
+
 from ..security.encryption import secure_storage
 from ..security.obsidian_encryption import save_encrypted_vault_file, load_encrypted_vault_file
-
 from ..config import CONFIG, STORAGE_DIR, HAS_CHROMA, log_status
 from .core import AgentMemory
+from .fact_claw import FactClaw
 
 
 class WikiManager:
@@ -142,30 +144,20 @@ aliases: ["{title.lower()}"]
 
 class MemoryManager:
     """Manages all memory operations: ChromaDB, MemoryIndex, hybrid retrieval, caching, and Obsidian Vault."""
-
     def __init__(self, agent: AgentMemory):
         self.agent = agent
         self.chroma_client = None
         self.collection = None
         self._recent_rag_cache: Dict = {}
-
-        # Wiki Manager
         self.wiki = WikiManager(agent)
-
-        # Memory Router
         self.router = MemoryRouter(agent)
         self.router.set_memory_manager(self)
-
-        # Decay Manager (30-day archival)
         self.decay_manager = DecayManager(agent)
         self.decay_manager.set_memory_manager(self)
-
-        # Registry Wing for users + social graph
+        self.fact_claw = FactClaw(agent)
         self.registry_wing = RegistryWing(agent)
 
-        # ====================== STRICT MEMORY FOLDER STRUCTURE ======================
         self.storage_base = STORAGE_DIR
-
         self.FOLDER_MAP = {
             "hall_of_records": self.storage_base / "archived" / "hall_of_records",
             "journal_archive": self.storage_base / "archived" / "Journal_Archive",
@@ -184,15 +176,16 @@ class MemoryManager:
             "registry_wing": self.storage_base / "Registry_Wing",
         }
 
-        # Create all folders
         for folder in self.FOLDER_MAP.values():
             folder.mkdir(parents=True, exist_ok=True)
 
-        # Explicitly ensure Registry Wing exists
-        self.FOLDER_MAP["registry_wing"].mkdir(parents=True, exist_ok=True)
-
-        # Transcript directory
         self.transcript_dir = self.FOLDER_MAP["transcripts"]
+
+    def add(self, content: str, topic: str = "general", importance: float = 0.6, tags: List[str] = None, suppress_daemons: bool = False):
+        """Safe add with suppression flag — this is the single choke point."""
+        if not content or not content.strip():
+            return None
+        return self.router.route(content, category=topic, importance=importance, tags=tags or [], suppress_daemons=suppress_daemons)
 
         # ====================== Obsidian Vault ======================
         self.vault_dir = self.FOLDER_MAP["wiki_atrium"]
@@ -344,7 +337,12 @@ class MemoryManager:
         
         return traditional[:n_results]
 
-    def add(self, content: str, topic: str = "general", importance: float = 0.6, tags: List[str] = None):
+    def add(self, content: str, topic: str = "general", importance: float = 0.6, tags: List[str] = None, suppress_daemons: bool = False, **kwargs):
+        """
+        Adds a memory to the system.
+        suppress_daemons: If True, prevents this addition from triggering 
+        recursive autonomous events (like auto-journaling).
+        """
         """Safe single-pass add"""
         if not content or not content.strip():
             return None
@@ -622,26 +620,36 @@ aliases: ["{title.lower()}"]
         return self.wiki.get_status()
 
 class MemoryRouter:
-    """Final locked-down router - prevents recursion and duplicate writes."""
-
+    """FINAL LOCKED-DOWN ROUTER — this kills the cascade permanently."""
     def __init__(self, agent: "AgentMemory"):
         self.agent = agent
         self.mm = None
-        self._routing_in_progress = False  # Guard against loops
+        self._routing_in_progress = False
+        self._last_write = {}  # category -> timestamp
+        self._write_lock = threading.Lock()
 
     def set_memory_manager(self, mm):
         self.mm = mm
 
-    def route(self, content: str, category: str = "general", importance: float = 0.6, tags: List[str] = None):
-        """Single-pass routing with loop protection"""
+    def route(self, content: str, category: str = "general", importance: float = 0.6, tags: List[str] = None, suppress_daemons: bool = False):
         if self._routing_in_progress or not content or not content.strip():
             return None
 
-        self._routing_in_progress = True
-        tags = tags or []
+        with self._write_lock:
+            now = time.time()
+            cat_key = category.lower()
+            if cat_key in self._last_write and now - self._last_write[cat_key] < 0.1:  # 100ms hard cooldown
+                return None
+            self._last_write[cat_key] = now
 
-        try:
-            mapping = {
+            self._routing_in_progress = True
+            try:
+                # TERMINAL CATEGORIES — never re-trigger daemons
+                terminal = {"journal_archive", "reflection_grove", "prediction_tower", "journal"}
+                if cat_key in terminal or cat_key.startswith("journal_archive_"):
+                    suppress_daemons = True
+    
+                mapping = {
                 "journal": ("journal_archive", "Journal Archive"),
                 "reflection": ("reflection_grove", "Reflection Grove"),
                 "prediction": ("prediction_tower", "Prediction Tower"),
@@ -654,44 +662,43 @@ class MemoryRouter:
                 "general": ("memory_library", "Memory Library"),
             }
 
-            folder_key, room_name = mapping.get(category.lower(), ("memory_library", "Memory Library"))
+                folder_key, room_name = mapping.get(cat_key, ("memory_library", "Memory Library"))
+                target_path = self.mm.get_memory_path(folder_key)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"{category}_{timestamp}.md"
+                file_path = target_path / filename
 
-            # Direct file write only
-            target_path = self.mm.get_memory_path(folder_key)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"{category}_{timestamp}.md"
-            file_path = target_path / filename
-
-            header = f"""---
+                header = f"""---
 title: {category.title()} Entry - {timestamp}
 created: {datetime.now().isoformat()}
 room: {room_name}
 importance: {importance}
-tags: {tags}
----
+tags: {tags or []}
+suppress_daemons: {suppress_daemons}
+---\n"""
+                file_path.write_text(header + content.strip(), encoding="utf-8")
+                print(f"[ROUTER] ✅ Wrote to {folder_key}/{filename}")
 
-"""
-            file_path.write_text(header + content.strip(), encoding="utf-8")
-            print(f"[ROUTER] ✅ Wrote to {folder_key}/{filename}")
+                # Safe internal calls only when NOT suppressed
+                if not suppress_daemons:
+                    if hasattr(self.agent, 'omnipalace') and hasattr(self.agent.omnipalace, 'add_to_room'):
+                        self.agent.omnipalace.add_to_room(room_name, content[:500], tags=tags or [])
+                    if hasattr(self.agent, 'index') and hasattr(self.agent.index, 'add_entry'):
+                        self.agent.index.add_entry(content.strip(), category, importance, tags or [])
 
-            # Safe OmniPalace call
-            if hasattr(self.agent, 'omnipalace') and hasattr(self.agent.omnipalace, 'add_to_room'):
-                try:
-                    self.agent.omnipalace.add_to_room(room_name, content[:500], tags=tags)
-                except:
-                    pass
+                # Use BlockReasoner to damp internal state (self-evolution)
+                if hasattr(self.agent, 'block_reasoner') and not suppress_daemons:
+                    try:
+                        ctx = torch.tensor([[content[:128]]], dtype=torch.float32) if 'torch' in globals() else None
+                        if ctx is not None:
+                            self.agent.block_reasoner.reason_and_learn(ctx)
+                    except:
+                        pass
 
-            # Direct index add only (no agent.add)
-            if hasattr(self.agent, 'index') and hasattr(self.agent.index, 'add_entry'):
-                try:
-                    self.agent.index.add_entry(content.strip(), category, importance, tags)
-                except:
-                    pass
+            finally:
+                self._routing_in_progress = False
 
-        finally:
-            self._routing_in_progress = False
-
-        return f"✅ Routed to {folder_key} → {room_name}"
+            return f"✅ Routed to {folder_key} → {room_name}"
 
 class DecayManager:
     """30-day decay: moves old journals/memories to long-term Hall of Records."""

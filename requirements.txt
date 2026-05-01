@@ -22,3 +22,12 @@ graspologic
 # Development / Testing
 pytest
 ruff
+
+# PyTorch (CPU version - recommended for stability on Windows)
+torch
+torchvision
+torchaudio
+--index-url https://download.pytorch.org/whl/cpu
+
+# If you have NVIDIA GPU and want CUDA (faster), use this instead:
+# torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121

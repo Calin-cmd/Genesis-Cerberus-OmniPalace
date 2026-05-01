@@ -94,6 +94,11 @@ class AgentState:
         if not self._dirty:
             return False
         try:
+            # SMART FIX: If personality is an object, use to_dict(). If it's already a dict, use as is.
+            personality_data = self.personality
+            if hasattr(self.personality, 'to_dict'):
+                personality_data = self.personality.to_dict()
+
             data = {
                 "current_session": self.current_session,
                 "session_budget": self.session_budget,
@@ -108,7 +113,7 @@ class AgentState:
                 "total_xp": self.total_xp,
                 "level": self.level,
                 "xp_sources": dict(self.xp_sources),
-                "personality": self.personality,
+                "personality": personality_data, # Use the flattened data here
                 "omnipalace_rooms": self.omnipalace_rooms,
                 "current_palace_room": self.current_palace_room,
                 "wiki_contributions": self.wiki_contributions,

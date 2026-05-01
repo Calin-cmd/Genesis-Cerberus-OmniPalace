@@ -2,7 +2,6 @@
 Genesis v5.6.9 Cerberus OmniPalace — AutonomousManager
 Full autonomous behaviors: journaling, reflection, predictions, coherence, decay, nudges,
 self-improvement, and Obsidian wiki self-healing loop.
-Balanced journaling + trace parsing for atomic fact extraction.
 """
 
 from __future__ import annotations
@@ -10,23 +9,24 @@ import time
 import random
 import json
 import re
-from datetime import datetime, date
-from typing import Optional, List, Dict, Any
+from datetime import datetime
+from typing import Optional
 from pathlib import Path
 from .claw_safety import ClawSafety
 
 from ..config import CONFIG, RAG_MODEL, STORAGE_DIR, TOPICS_DIR, TRACE_DIR
 from .core import AgentMemory
 from ..utils import dump_trace
-from .persistence import archive_session_to_hall_of_records   # === RESTORED VISION IMPORT ===
+from .persistence import archive_session_to_hall_of_records
 
 
 class AutonomousManager:
-    """Full autonomous behaviors for Genesis v5.6.9 Cerberus OmniPalace with WikiManager integration."""
+    """Full autonomous behaviors for Genesis v5.6.9 Cerberus OmniPalace."""
 
     def __init__(self, agent: AgentMemory):
         self.agent = agent
         self.repo_root = Path(__file__).parent.parent.parent.resolve()
+        
         try:
             self.claw_safety = ClawSafety(self.repo_root)
             print("[CLAW] SelfImprovementDaemon integrated with safety layer")
@@ -34,11 +34,20 @@ class AutonomousManager:
             print(f"[CLAW INIT WARNING] {e}")
             self.claw_safety = None
 
+        # === RATE-LIMIT GUARDS ===
+        self._last_cycle = time.time() - 181   # first run allowed immediately
+        self._last_journal = time.time() - 301
+        self._last_cycle = time.time() + 180 # 3-min cooldown (but *signal strength* matters)
+
     def _create_journal_entry(self, force: bool = False) -> str:
         """Create a useful human-readable journal entry from Genesis's point of view."""
         sess = self.agent.current_session
         turns_since = self.agent.turns_since_last_journal.get(sess, 0)
         
+        # Rate limit protection
+        if not force and (time.time() - self._last_journal < 300):
+            return "Journal skipped — rate limited (300s cooldown)."
+
         if not force and turns_since < 20:
             return "Journal skipped — not enough new activity since last entry."
 
@@ -75,12 +84,14 @@ Guidelines:
             model=RAG_MODEL
         )
 
-        # Add to memory and get ID
-        entry_id = self.agent.add(journal_text, topic="journal", importance=0.85, tags=["journal", "session_summary"])
+        # CRITICAL: suppress_daemons=True prevents re-triggering the router
+        entry_id = self.agent.add(journal_text, topic="journal", importance=0.85, tags=["journal", "session_summary"], suppress_daemons=True)
 
         self.agent.turns_since_last_journal[sess] = 0
         self.agent.stats["journals_run"] = self.agent.stats.get("journals_run", 0) + 1
         self.agent.mark_dirty()
+
+        self._last_journal = time.time()
 
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         print(f"\n=== JOURNAL ENTRY CREATED (ID: {entry_id}) @ {timestamp} ===\n{journal_text}\n")
@@ -94,6 +105,9 @@ Guidelines:
 
     def _run_reflection(self, force: bool = False) -> str:
         """Run reflection cycle."""
+        if not force and (time.time() - self._last_cycle < 30):
+            return "Reflection skipped — rate limited."
+
         sess = self.agent.current_session
         recent = self.agent.sessions.get(sess, [])[-12:]
         if not recent and not force:
@@ -114,7 +128,8 @@ History:
             model=RAG_MODEL
         )
 
-        self.agent.add(reflection, topic="reflection", importance=0.82, tags=["self_improvement"])
+        # suppress_daemons=True
+        self.agent.add(reflection, topic="reflection", importance=0.82, tags=["self_improvement"], suppress_daemons=True)
         self.agent.stats["reflections_run"] = self.agent.stats.get("reflections_run", 0) + 1
         self.agent.mark_dirty()
 
@@ -123,6 +138,9 @@ History:
 
     def generate_forward_predictions(self, force: bool = False) -> str:
         """Generate 3 actionable forward predictions."""
+        if not force and (time.time() - self._last_cycle < 45):
+            return "Predictions skipped — rate limited."
+
         sess = self.agent.current_session
         recent = self.agent.sessions.get(sess, [])[-10:]
         if not recent and not force:
@@ -143,7 +161,8 @@ History:
             model=RAG_MODEL
         )
 
-        self.agent.add(predictions, topic="forward_pred", importance=0.82, tags=["prediction"])
+        # suppress_daemons=True
+        self.agent.add(predictions, topic="forward_pred", importance=0.82, tags=["prediction"], suppress_daemons=True)
         self.agent.stats["predictions_run"] = self.agent.stats.get("predictions_run", 0) + 1
         self.agent.mark_dirty()
 
@@ -208,6 +227,9 @@ History:
 
     def run_self_improvement_cycle(self) -> str:
         """Improved cycle with Claw Safety Layer — robust version."""
+        if time.time() - self._last_cycle < 120:   # 2 minutes minimum between full cycles
+            return "Improvement cycle skipped — rate limited."
+
         print(f"[SELF-IMPROVEMENT] Starting balanced cycle @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
         
         self._run_reflection(force=True)
@@ -217,7 +239,7 @@ History:
         if random.random() < 0.4:
             self._create_journal_entry(force=True)
 
-        # === CLAW SAFETY (Robust version) ===
+        # === CLAW SAFETY (unchanged) ===
         try:
             if hasattr(self, 'claw_safety') and self.claw_safety is not None:
                 suggestion = self._generate_claw_improvement_suggestion()
@@ -231,9 +253,17 @@ History:
         except Exception as e:
             print(f"[CLAW SAFETY ERROR] {e}")
 
+        # === BLOCKREASONER SELF-EVOLUTION (this is the learning part) ===
+        if hasattr(self.agent, 'block_reasoner'):
+            try:
+                self.agent.block_reasoner.self_evolve(num_steps=5)  # learns from this cycle
+            except Exception as e:
+                print(f"[BLOCK] Self-evolve skipped: {e}")
+
         self.agent.stats["improvement_cycles"] = self.agent.stats.get("improvement_cycles", 0) + 1
         self.agent.mark_dirty()
-        return "✅ Self-improvement cycle completed with Claw safety review."
+        self._last_cycle = time.time()
+        return "✅ Self-improvement cycle completed with Claw safety review + BlockReasoner evolution."
 
     def _parse_traces_for_atomic_facts(self):
         """Parse recent traces and extract atomic facts for memory indexing."""
@@ -264,7 +294,10 @@ History:
             print(f"[TRACE PARSER] Error: {e}")
 
     def _run_full_auto_dream(self):
-        """Full AutoDream cycle with trace parsing and reduced journal frequency."""
+        """Full AutoDream cycle — now rate-limited."""
+        if time.time() - self._last_cycle < 180:   # 3 minutes minimum
+            return
+
         print(f"[AUTODREAM] Starting full maintenance cycle @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}...")
         
         self._parse_traces_for_atomic_facts()
@@ -278,8 +311,7 @@ History:
         print(f"[AUTODREAM] Cycle completed @ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         self.agent.mark_dirty()
 
-        # Track runs for dashboard
-        self.agent.state.stats["auto_dream_runs"] += 1
+        self.agent.state.stats["auto_dream_runs"] = self.agent.state.stats.get("auto_dream_runs", 0) + 1
         self.agent.state.mark_dirty()
         print(f"[AUTODREAM] Cycle completed — Total runs: {self.agent.state.stats['auto_dream_runs']}")
 
@@ -303,62 +335,13 @@ History:
         def daemon_loop():
             while True:
                 try:
-                    time.sleep(180)  # Every 3 minutes
-                    if random.random() < 0.7:   # Probabilistic to avoid overload
+                    time.sleep(180)
+                    if random.random() < 0.7:
                         self.run_daemons()
                 except Exception:
                     time.sleep(60)
 
-    def __init__(self, agent: AgentMemory):
-        self.agent = agent
-        # Initialize Claw Safety
-        self.repo_root = Path(__file__).parent.parent.parent.resolve()
-        self.claw_safety = ClawSafety(self.repo_root)
-        print("[CLAW] SelfImprovementDaemon integrated with safety layer")
-
-    def _generate_claw_improvement_suggestion(self) -> str:
-        """Generate a REAL LLM-powered self-improvement suggestion."""
-        # Gather recent context for better suggestions
-        recent_reflections = ""
-        if hasattr(self.agent, 'sessions') and self.agent.current_session in self.agent.sessions:
-            recent = self.agent.sessions[self.agent.current_session][-8:]
-            recent_reflections = "\n".join([f"Reflection: {t.get('response','')[:300]}" 
-                                          for t in recent if 'reflection' in str(t.get('topic',''))])
-
-        prompt = f"""You are Genesis's Claw self-improvement engine.
-Based on the current system state and recent reflections, suggest ONE specific, actionable code improvement.
-
-Current stats:
-- Level: {self.agent.level}
-- XP: {self.agent.total_xp}
-- AutoDream runs: {self.agent.state.stats.get('auto_dream_runs', 0)}
-- Memories: ~{len(getattr(self.agent.index, 'index_lines', []))}
-
-Recent reflections:
-{recent_reflections[-800:] if recent_reflections else "None yet"}
-
-Suggest one concrete improvement (code structure, performance, safety, memory management, etc.).
-Output format: Just the patch description + why it helps."""
-
-        try:
-            suggestion = self.agent.call_llm_safe(
-                system="You are a senior software engineer suggesting targeted improvements.",
-                prompt=prompt,
-                model=RAG_MODEL
-            )
-            return suggestion.strip() or "# No specific suggestion generated this cycle."
-        except:
-            return "# Fallback: Improve reflection quality and add more atomic fact patterns."
-        
         thread = threading.Thread(target=daemon_loop, daemon=True)
         thread.start()
-
-        # 30-day decay (safe call)
-        if hasattr(self.agent.memory, 'decay_manager'):
-            try:
-                decay_result = self.agent.memory.decay_manager.run_decay()
-                print(decay_result)
-            except Exception as e:
-                print(f"[DECAY ERROR] {e}")
 
         print("[AUTONOMOUS] Background daemons started (journaling, reflection, Hall of Records archiving active)")

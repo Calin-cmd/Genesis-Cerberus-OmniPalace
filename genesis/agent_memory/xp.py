@@ -227,7 +227,7 @@ Level: {self.agent.level} | Total XP: {self.agent.total_xp:,}
 Progress to next level: {self.agent.get_xp_progress()}
 
 Personality Traits:
-{chr(10).join([f"  • {k.capitalize()}: {v:.2f}" for k, v in self.agent.personality.items()])}
+{chr(10).join([f" • {k.capitalize()}: {v:.2f}" for k, v in self.agent.personality.traits.items()])}
 
 Session: {self.agent.current_session}
 Tokens used this session: {getattr(self.agent.state, 'tokens_used_session', 0)}

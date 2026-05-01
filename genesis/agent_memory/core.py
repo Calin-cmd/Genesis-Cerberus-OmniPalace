@@ -11,6 +11,8 @@ import time
 from datetime import datetime
 from typing import Optional, List, TYPE_CHECKING
 from collections import defaultdict
+import sys
+from pathlib import Path
 
 from ..config import CONFIG, log_status, CORE_FACTS, RAG_MODEL, STORAGE_DIR
 from ..dependencies import HAS_CHROMA
@@ -18,6 +20,8 @@ from .state import AgentState
 from .user_profiles import UserProfileManager
 from .social_graph import SocialGraph
 from .access_control import AccessControl
+from .onboarding import OnboardingManager
+from .personality import PersonalityEngine
 
 if TYPE_CHECKING:
     from .memory import MemoryManager
@@ -28,11 +32,12 @@ if TYPE_CHECKING:
     from .user_model import UserModelManager
     from .omnipalace_integration import OmniPalaceManager
     from .memory_index import MemoryIndex
-    from ..cerberus import CerberusOrchestrator
+    from .cerberus import CerberusOrchestrator
     from ..daemons import BackgroundSaver, AutoDreamDaemon, ProactiveScheduler
     from ..self_improvement_daemon import SelfImprovementDaemon
     from .tools import ToolRegistry
     from ..notification import ProactiveTools
+    from .block_reasoner import BlockReasoner
 
 
 @dataclass
@@ -79,12 +84,22 @@ class AgentMemory:
         self.memory = MemoryManager(self)
         self.cerberus = CerberusOrchestrator(self)
         self.omnipalace = OmniPalaceManager(self)
+        self.personality = PersonalityEngine(initial_state=self.state.personality)          
+        self.personality.load_state("personality_state.json")
+
+        # === BLOCK REASONER — production-ready + self-evolution enabled ===
+        from .block_reasoner import BlockReasoner
+        session_length = 64
+        embedding_dim = 128
+        self.block_reasoner = BlockReasoner(T=session_length, D=embedding_dim, layers=4, H=8)
+        self.block_reasoner.setup_training(lr=1e-4)   # enables .self_evolve()
+        print("[BLOCK] ✅ Enhanced BlockReasoner active — persistent relational universe + self-evolution")
 
         # Subsystems - Daemons
         self.background_saver = BackgroundSaver(self)
         self.auto_dream = AutoDreamDaemon(self)
         self.scheduler = ProactiveScheduler(self)
-        self.autonomous = AutonomousManager(self)      # This now includes ClawSafety
+        self.autonomous = AutonomousManager(self)
         self.tool_registry = ToolRegistry(self)
         self.commands = CommandRouter(self)
         self.user_model = UserModelManager(self)
@@ -93,6 +108,10 @@ class AgentMemory:
         self.social_graph = SocialGraph(self)
         self.llm = LLMManager(self)
         self.xp = XPManager(self)
+
+        # Onboarding Manager
+        self.onboarding = OnboardingManager(self)
+        
         # Claw is now handled inside AutonomousManager (via self.claw_safety)
 
         # User name protection
@@ -148,10 +167,33 @@ class AgentMemory:
             }
             self.state.mark_dirty()
 
+    def run_onboarding(self) -> str:
+        """Run full onboarding experience."""
+        if hasattr(self, 'onboarding'):
+            self.onboarding.run_onboarding(is_first_run=True)
+            return "✅ Onboarding completed successfully."
+        return "Onboarding unavailable."
+
     @contextlib.contextmanager
     def _lock(self):
         with self._daemon_lock:
             yield
+
+        # Initial room population on startup
+        if hasattr(self, 'omnipalace') and hasattr(self.omnipalace, 'auto_populate_rooms_from_folders'):
+            try:
+                self.omnipalace.auto_populate_rooms_from_folders()
+            except:
+                pass
+
+    def get_recent_context(self, limit: int = 20):
+        """Safe way to pull recent memory for block reasoning."""
+        try:
+            if hasattr(self, 'sessions') and self.sessions:
+                return [s.get('summary', '') for s in list(self.sessions.values())[-limit:]]
+            return None
+        except:
+            return None
 
     # ====================== COMPLETE LIVE DELEGATIONS ======================
     @property
@@ -173,13 +215,6 @@ class AgentMemory:
     @xp_sources.setter
     def xp_sources(self, value): 
         self.state.xp_sources = value
-        self.state.mark_dirty()
-
-    @property
-    def personality(self): return self.state.personality
-    @personality.setter
-    def personality(self, value): 
-        self.state.personality = value
         self.state.mark_dirty()
 
     @property
@@ -349,17 +384,23 @@ class AgentMemory:
         # (full logic can stay here or move to lifecycle.py later)
         pass  # placeholder - original logic can be added back if needed
 
+    def create_new_session_for_user(self, user_id: str):
+        """Create a fresh context when switching to a different user."""
+        self.current_session = f"{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        self.sessions[self.current_session] = []
+        self.current_user_id = user_id
+        self.mark_dirty()
+        print(f"[CONTEXT] Fresh session started for {user_id}")
+
     # ====================== MULTI USER PROFILES ======================
     def switch_user(self, user_id: str) -> str:
-        """Switch active user with full context update."""
+        """Switch active user context."""
         if hasattr(self, 'user_profiles'):
             result = self.user_profiles.switch_user(user_id)
-            # Force refresh current user context
-            if hasattr(self, 'current_user'):
-                profile = self.user_profiles.get_current_profile()
-                print(f"👤 Switched to user: {profile.display_name} (ID: {user_id})")
+            self.current_user_id = user_id
+            self.mark_dirty()
             return result
-        return "User profile system not initialized."
+        return "User switching unavailable."
 
     def add_user(self, user_id: str, display_name: str, relationship: str = "friend", trust: float = 0.7):
         """Add a new user to the system."""
@@ -444,8 +485,15 @@ class AgentMemory:
     def ensure_session_tracking(self, sess: str):
         pass
 
-    def add(self, content: str, topic: str = "general", importance: float = 0.6, tags: List[str] = None):
-        return self.memory.add(content, topic, importance, tags) if self.memory else None
+    def add(self, content: str, topic: str = "general", importance: float = 0.6, tags: List[str] = None, **kwargs):
+        """
+        Adds a memory to the system. 
+        **kwargs allows flags like 'suppress_daemons' to pass through to the MemoryManager.
+        """
+        if self.memory:
+            # We pass all arguments, including the flexible **kwargs, to the actual memory manager
+            return self.memory.add(content, topic, importance, tags, **kwargs)
+        return None
 
     def call_llm_safe(self, system: str, prompt: str, model=None):
         return self.llm.generate(system, prompt, model) if self.llm else "LLM unavailable."

@@ -52,6 +52,9 @@ class CommandRouter:
             self.agent.reset_session(hard_reset=False)
             response = f"✅ New session started: {self.agent.current_session} (token budget reset)"
 
+        elif user_input.strip() == "/onboarding":
+            return self.agent.run_onboarding() if hasattr(self.agent, 'run_onboarding') else "Onboarding unavailable."
+
         # ====================== MULTI-USER COMMANDS (Phase 3.1) ======================
         elif cmd == "/users" or cmd == "/listusers":
             response = self.agent.list_users() if hasattr(self.agent, 'list_users') else "User system initializing..."

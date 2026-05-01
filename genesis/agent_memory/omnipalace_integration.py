@@ -174,6 +174,37 @@ class OmniPalaceManager:
 
         return "Memory Library"
 
+    def auto_populate_rooms_from_folders(self):
+        """Scan key folders and auto-populate corresponding OmniPalace rooms."""
+        print("[OMNIPALACE] Auto-populating rooms from folders...")
+        populated = 0
+
+        folder_to_room = {
+            "journal_archive": "Journal Archive",
+            "reflection_grove": "Reflection Grove",
+            "prediction_tower": "Prediction Tower",
+            "skill_forge": "Skill Forge",
+            "registry_wing": "Registry Wing",
+            "memory_library": "Memory Library",
+            "world_observatory": "World Observatory",
+        }
+
+        for folder_key, room_name in folder_to_room.items():
+            try:
+                path = self.agent.memory.get_memory_path(folder_key)
+                for file in list(path.glob("*.md")):
+                    if file.suffix != ".md":
+                        continue
+                    if file.stat().st_size > 0:
+                        content = file.read_text(encoding="utf-8", errors="ignore")[:600]
+                        self.add_to_room(room_name, content, tags=[folder_key])
+                        populated += 1
+            except:
+                pass
+
+        print(f"[OMNIPALACE] Auto-populated {populated} entries across rooms")
+        return populated
+
     def visualize_palace_map(self) -> str:
         """Full palace visualization with Hall of Records emphasis."""
         out = ["\n🌟 === OMNIPALACE MAP ==="]
@@ -231,38 +262,37 @@ class OmniPalaceManager:
         return "Memory not found."
 
     def add_to_room(self, room_name: str, content: str, tags: List[str] = None):
-        """Add memory to a specific OmniPalace room for method of loci recall."""
+        """Add memory to room + auto-populate from folders if needed."""
         tags = tags or []
         
+        # Auto-create room if missing
         if room_name not in self.rooms:
-            # Auto-create room if it doesn't exist yet
             self.rooms[room_name] = {
                 "theme": f"🌐 {room_name}",
-                "description": f"Auto-generated room for {room_name}",
+                "description": f"Auto-populated room for {room_name}",
                 "color": "white",
                 "coherence": 0.8,
                 "x": random.randint(-15, 15),
                 "y": random.randint(-15, 15),
                 "z": random.randint(-8, 12)
             }
-        
+
         entry = {
             "content": content[:800],
             "timestamp": datetime.now().isoformat(),
             "tags": tags,
-            "id": f"room_{len(self.rooms[room_name])}"
+            "id": f"room_{len(self.rooms[room_name].get('entries', []))}"
         }
         
         if "entries" not in self.rooms[room_name]:
             self.rooms[room_name]["entries"] = []
-        
         self.rooms[room_name]["entries"].append(entry)
         
-        # Also add to main memory system
+        # Also add to main memory
         if hasattr(self.agent, 'add'):
             self.agent.add(content, topic=room_name.lower().replace(" ", "_"), importance=0.7, tags=tags)
         
-        log_status(f"[OMNIPALACE] Added to room '{room_name}' ({len(content)} chars)")
+        log_status(f"[OMNIPALACE] Added to room '{room_name}'")
         return True
 
     def merge_rooms(self, room1: str, room2: str) -> str:
